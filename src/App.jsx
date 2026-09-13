@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { ComposableMap, Geographies, Geography, Marker } from "@vnedyalk0v/react19-simple-maps";
 import {
   Plane, MapPin, CalendarDays, Trash2, AlertTriangle, Stamp, ListOrdered,
   BarChart3, PlusCircle, ChevronDown, X, Loader2, Home, Briefcase, Pencil,
@@ -146,6 +147,7 @@ const CONTINENT_ACCENT = {
   Africa: "#C9A6E8", Oceania: "#7FB0E8", Other: "#8B93A7",
 };
 const RESIDENCY_THRESHOLD = 183;
+const WORLD_GEO_URL = "https://unpkg.com/world-atlas@2.0.2/countries-110m.json";
 
 const COUNTRY_LATLON = {
   "United States": [39.8, -98.6], Canada: [56.1, -106.3], Mexico: [23.6, -102.5],
@@ -1037,10 +1039,6 @@ function CountryTripsModal({ entry, onClose, onEdit }) {
 /* World Map tab                                                            */
 /* ---------------------------------------------------------------------- */
 
-function project(lat, lon) {
-  return { x: ((lon + 180) / 360) * 900, y: ((90 - lat) / 180) * 450 };
-}
-
 function WorldMapTab({ trips, onEdit }) {
   const [selected, setSelected] = useState(null);
   const [typeFilter, setTypeFilter] = useState("all");
@@ -1076,7 +1074,7 @@ function WorldMapTab({ trips, onEdit }) {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 style={{ fontFamily: SERIF, fontSize: "1.3rem", fontWeight: 600 }}>World map</h2>
-          <p className="text-sm mt-1" style={{ color: MUTED }}>Approximate positions — dot size and glow track days spent.</p>
+          <p className="text-sm mt-1" style={{ color: MUTED }}>Dot size and glow track days spent — click a country to see its trips.</p>
         </div>
         <TypeFilter value={typeFilter} onChange={setTypeFilter} />
       </div>
@@ -1084,36 +1082,42 @@ function WorldMapTab({ trips, onEdit }) {
       {entries.length === 0 ? (
         <EmptyState text="No trips match this filter." />
       ) : (
-        <div className="rounded-2xl p-4 sm:p-6 overflow-x-auto" style={{ background: SURFACE, border: `1px solid ${BORDER}` }}>
-          <svg viewBox="0 0 900 450" className="w-full" style={{ minWidth: 640 }}>
-            <rect width="900" height="450" fill={BG} rx="10" />
-            {Array.from({ length: 11 }).map((_, i) => (
-              <line key={`v${i}`} x1={i * 90} y1={0} x2={i * 90} y2={450} stroke={BORDER} strokeWidth="0.5" />
-            ))}
-            {[1, 2, 3].map((i) => (
-              <line key={`h${i}`} x1={0} y1={i * 112.5} x2={900} y2={i * 112.5} stroke={BORDER} strokeWidth="0.5" />
-            ))}
-            <line x1={0} y1={225} x2={900} y2={225} stroke={BORDER} strokeWidth="1" strokeDasharray="4 4" />
+        <div className="rounded-2xl p-4 sm:p-6" style={{ background: SURFACE, border: `1px solid ${BORDER}` }}>
+          <ComposableMap projectionConfig={{ scale: 148 }} style={{ width: "100%", height: "auto" }}>
+            <Geographies geography={WORLD_GEO_URL}>
+              {({ geographies }) =>
+                geographies.map((geo) => (
+                  <Geography
+                    key={geo.rsmKey}
+                    geography={geo}
+                    fill={SURFACE_RAISED}
+                    stroke={BORDER}
+                    strokeWidth={0.5}
+                    style={{
+                      default: { outline: "none" },
+                      hover: { outline: "none", fill: SURFACE_RAISED },
+                      pressed: { outline: "none" },
+                    }}
+                  />
+                ))
+              }
+            </Geographies>
 
             {entries.map((entry) => {
               const [lat, lon] = COUNTRY_LATLON[entry.country];
-              const { x, y } = project(lat, lon);
               const ratio = entry.days / maxDays;
-              const r = 6 + 10 * ratio;
+              const r = 5 + 9 * ratio;
               const over = entry.days > RESIDENCY_THRESHOLD;
               const color = CONTINENT_ACCENT[continentOf(entry.country)];
               return (
-                <g key={entry.country} onClick={() => setSelected(entry)} style={{ cursor: "pointer" }}>
-                  <circle cx={x} cy={y} r={r + 7} fill={color} opacity="0.12" />
-                  <circle cx={x} cy={y} r={r} fill={color} opacity={0.4 + 0.6 * ratio} stroke={over ? DANGER : "none"} strokeWidth={over ? 2 : 0} />
-                  <text x={x} y={y - r - 6} textAnchor="middle" fontSize="11" fill={TEXT} style={{ fontFamily: SANS }}>
-                    {entry.country}
-                  </text>
-                  {over && <text x={x} y={y + 3} textAnchor="middle" fontSize="9" fill="#1A0A0C" style={{ fontWeight: 700 }}>!</text>}
-                </g>
+                <Marker key={entry.country} coordinates={[lon, lat]} onClick={() => setSelected(entry)} style={{ cursor: "pointer" }}>
+                  <title>{`${entry.country} — ${entry.days}d`}</title>
+                  <circle r={r + 5} fill={color} opacity={0.15} />
+                  <circle r={r} fill={color} opacity={0.45 + 0.55 * ratio} stroke={over ? DANGER : "none"} strokeWidth={over ? 1.5 : 0} />
+                </Marker>
               );
             })}
-          </svg>
+          </ComposableMap>
 
           <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs" style={{ color: MUTED }}>
             {continentsShown.map((c) => (
