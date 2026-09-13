@@ -12,7 +12,8 @@
   "dependencies": {
     "lucide-react": "^1.45.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "react-simple-maps": "^5.0.5"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
