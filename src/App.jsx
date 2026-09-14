@@ -3,8 +3,8 @@ import { ComposableMap, Geographies, Geography, Marker } from "@vnedyalk0v/react
 import {
   Plane, MapPin, CalendarDays, Trash2, AlertTriangle, Stamp, ListOrdered,
   BarChart3, PlusCircle, ChevronDown, X, Loader2, Home, Briefcase, Pencil,
-  Download, Upload, Map as MapIcon, RefreshCw, CloudOff, Search, StickyNote,
-  Settings2,
+  Download, Upload, Map as MapIcon, RefreshCw, Search, StickyNote,
+  Settings2, Database, Check,
 } from "lucide-react";
 
 /* ---------------------------------------------------------------------- */
@@ -107,16 +107,28 @@ const SHEET_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwtSB-MtyxR1b
 const sheetConfigured = SHEET_WEB_APP_URL !== "YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL";
 const POLL_INTERVAL_MS = 30000; // background refresh, since Apps Script has no realtime push
 
-async function fetchTripsFromSheet() {
-  const res = await fetch(SHEET_WEB_APP_URL, { method: "GET" });
+// Anyone opening this deployed site can connect their OWN Google Sheet
+// instead of the one baked in above — stored per-browser via localStorage,
+// so it doesn't affect other visitors. See SheetSettingsModal / the
+// full-page connect screen below.
+const SHEET_URL_STORAGE_KEY = "waypoints:sheet-url";
+const BANNER_DISMISSED_KEY = "waypoints:shared-banner-dismissed";
+
+function loadStoredSheetUrl() {
+  try { return localStorage.getItem(SHEET_URL_STORAGE_KEY) || ""; } catch (e) { return ""; }
+}
+
+async function fetchTripsFromSheet(url) {
+  const res = await fetch(url, { method: "GET" });
   if (!res.ok) throw new Error("Sheet fetch failed");
   const data = await res.json();
+  if (!Array.isArray(data)) throw new Error("Unexpected response");
   return data.map(rowToTrip);
 }
 
-async function postToSheet(payload) {
+async function postToSheet(url, payload) {
   // text/plain avoids a CORS preflight that Apps Script web apps don't handle well.
-  const res = await fetch(SHEET_WEB_APP_URL, {
+  const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "text/plain;charset=utf-8" },
     body: JSON.stringify(payload),
@@ -332,19 +344,35 @@ function timeAgo(date) {
 
 export default function App() {
   const [trips, setTrips] = useState([]);
-  const [loading, setLoading] = useState(sheetConfigured);
+  const [sheetUrl, setSheetUrlState] = useState(() => loadStoredSheetUrl() || (sheetConfigured ? SHEET_WEB_APP_URL : ""));
+  const [loading, setLoading] = useState(!!sheetUrl);
   const [syncing, setSyncing] = useState(false);
   const [lastSynced, setLastSynced] = useState(null);
   const [tab, setTab] = useState("log");
   const [toast, setToast] = useState(null);
   const [editingTrip, setEditingTrip] = useState(null);
+  const [sheetModalOpen, setSheetModalOpen] = useState(false);
+
+  const isCustomSheet = !!loadStoredSheetUrl();
+
+  const connectSheet = useCallback((url) => {
+    try { localStorage.setItem(SHEET_URL_STORAGE_KEY, url); } catch (e) { /* best effort */ }
+    setSheetUrlState(url);
+    setSheetModalOpen(false);
+  }, []);
+
+  const disconnectSheet = useCallback(() => {
+    try { localStorage.removeItem(SHEET_URL_STORAGE_KEY); } catch (e) { /* best effort */ }
+    setSheetUrlState(sheetConfigured ? SHEET_WEB_APP_URL : "");
+    setSheetModalOpen(false);
+  }, []);
 
   const refresh = useCallback(async (silent) => {
-    if (!sheetConfigured) return;
+    if (!sheetUrl) return;
     if (!silent) setLoading(true);
     setSyncing(true);
     try {
-      const fresh = await fetchTripsFromSheet();
+      const fresh = await fetchTripsFromSheet(sheetUrl);
       setTrips(fresh);
       setLastSynced(new Date());
     } catch (e) {
@@ -353,15 +381,16 @@ export default function App() {
       setLoading(false);
       setSyncing(false);
     }
-  }, []);
+  }, [sheetUrl]);
 
-  // Loads automatically the moment the artifact opens — no login, no gate.
+  // Loads automatically the moment the site opens — no login, no gate,
+  // unless no sheet (default or custom) is connected at all.
   useEffect(() => {
     refresh(false);
-    if (!sheetConfigured) return;
+    if (!sheetUrl) return;
     const t = setInterval(() => refresh(true), POLL_INTERVAL_MS);
     return () => clearInterval(t);
-  }, [refresh]);
+  }, [refresh, sheetUrl]);
 
   const showToast = useCallback((msg) => setToast(msg), []);
   useEffect(() => {
@@ -373,11 +402,11 @@ export default function App() {
   // --- CRUD (optimistic, backed by the sheet) ------------------------------
   const addTrip = useCallback(
     async (trip) => {
-      if (!sheetConfigured) { showToast("Connect your Google Sheet first — see the setup notes at the top of this file."); return; }
+      if (!sheetUrl) { showToast("Connect a Google Sheet first."); return; }
       const newTrip = { ...trip, id: uid(), notes: trip.notes || "", stops: trip.stops || [] };
       setTrips((prev) => [newTrip, ...prev]);
       try {
-        await postToSheet({
+        await postToSheet(sheetUrl, {
           action: "add", id: newTrip.id, country: trip.country, start_date: trip.start, end_date: trip.end,
           trip_type: trip.type, notes: trip.notes || "", stops: (trip.stops || []).join(", "),
         });
@@ -387,16 +416,16 @@ export default function App() {
         showToast("Couldn't save that trip to your sheet — try again.");
       }
     },
-    [showToast]
+    [sheetUrl, showToast]
   );
 
   const updateTrip = useCallback(
     async (id, fields) => {
-      if (!sheetConfigured) return;
+      if (!sheetUrl) return;
       const prevTrips = trips;
       setTrips((p) => p.map((t) => (t.id === id ? { ...t, ...fields } : t)));
       try {
-        await postToSheet({
+        await postToSheet(sheetUrl, {
           action: "update", id, country: fields.country, start_date: fields.start, end_date: fields.end,
           trip_type: fields.type, notes: fields.notes || "", stops: (fields.stops || []).join(", "),
         });
@@ -407,45 +436,45 @@ export default function App() {
         showToast("Couldn't save your changes — try again.");
       }
     },
-    [trips, showToast]
+    [trips, sheetUrl, showToast]
   );
 
   const deleteTrip = useCallback(
     async (id) => {
-      if (!sheetConfigured) return;
+      if (!sheetUrl) return;
       const prevTrips = trips;
       setTrips((p) => p.filter((t) => t.id !== id));
       try {
-        await postToSheet({ action: "delete", id });
+        await postToSheet(sheetUrl, { action: "delete", id });
       } catch (e) {
         setTrips(prevTrips);
         showToast("Couldn't delete that trip.");
       }
     },
-    [trips, showToast]
+    [trips, sheetUrl, showToast]
   );
 
   const bulkDeleteTrips = useCallback(
     async (ids) => {
-      if (!sheetConfigured || ids.length === 0) return;
+      if (!sheetUrl || ids.length === 0) return;
       const prevTrips = trips;
       const idSet = new Set(ids);
       setTrips((p) => p.filter((t) => !idSet.has(t.id)));
       try {
-        await Promise.all(ids.map((id) => postToSheet({ action: "delete", id })));
+        await Promise.all(ids.map((id) => postToSheet(sheetUrl, { action: "delete", id })));
         showToast(`Deleted ${ids.length} trip${ids.length === 1 ? "" : "s"}.`);
       } catch (e) {
         setTrips(prevTrips);
         showToast("Couldn't delete some trips — try again.");
       }
     },
-    [trips, showToast]
+    [trips, sheetUrl, showToast]
   );
 
   const importTrips = useCallback(
     async (file) => {
       if (!file) return;
-      if (!sheetConfigured) { showToast("Connect your Google Sheet first — see the setup notes at the top of this file."); return; }
+      if (!sheetUrl) { showToast("Connect a Google Sheet first."); return; }
       try {
         const text = await file.text();
         const data = JSON.parse(text);
@@ -463,7 +492,7 @@ export default function App() {
           rows.push({ id: uid(), country, start_date: start, end_date: end, trip_type: type, notes, stops: stops.join(", ") });
         });
         if (rows.length === 0) { showToast("No valid trips found in that file."); return; }
-        await postToSheet({ action: "bulkAdd", rows });
+        await postToSheet(sheetUrl, { action: "bulkAdd", rows });
         setTrips((prev) => [
           ...rows.map((r) => ({
             id: r.id, country: r.country, start: r.start_date, end: r.end_date, type: r.trip_type,
@@ -476,7 +505,7 @@ export default function App() {
         showToast("Couldn't read or import that file.");
       }
     },
-    [showToast]
+    [sheetUrl, showToast]
   );
 
   const tabs = [
@@ -490,41 +519,67 @@ export default function App() {
   return (
     <div className="min-h-screen w-full" style={{ background: BG, color: TEXT }}>
       <FontStyles />
-      {!sheetConfigured && <ConfigBanner />}
 
-      <div className="mx-auto max-w-5xl px-4 sm:px-6 pb-24">
-        <Header syncing={syncing} lastSynced={lastSynced} onRefresh={() => refresh(true)} />
-
-        <nav className="sticky top-0 z-20 -mx-4 sm:-mx-6 px-4 sm:px-6 pt-2 pb-3 backdrop-blur-md" style={{ background: `${BG}E8` }}>
-          <div className="flex gap-1 sm:gap-2 overflow-x-auto rounded-xl p-1" style={{ background: SURFACE, border: `1px solid ${BORDER}` }}>
-            {tabs.map(({ id, label, icon: Icon }) => {
-              const active = tab === id;
-              return (
-                <button key={id} onClick={() => setTab(id)}
-                  className="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 sm:px-4 py-2 text-sm font-medium transition-all duration-200"
-                  style={{ background: active ? SURFACE_RAISED : "transparent", color: active ? ACCENT : MUTED }}>
-                  <Icon size={16} strokeWidth={2.2} />
-                  <span style={{ fontFamily: SANS }}>{label}</span>
-                </button>
-              );
-            })}
-          </div>
-        </nav>
-
-        <main className="mt-6">
-          {loading ? (
-            <FullScreenLoader label="Loading trips from your sheet…" compact />
-          ) : (
-            <>
-              {tab === "log" && <LogTab trips={trips} onAdd={addTrip} onJump={setTab} />}
-              {tab === "history" && <HistoryTab trips={trips} onDelete={deleteTrip} onBulkDelete={bulkDeleteTrips} onEdit={setEditingTrip} onImport={importTrips} />}
-              {tab === "insights" && <InsightsTab trips={trips} />}
-              {tab === "map" && <MapTab trips={trips} onEdit={setEditingTrip} />}
-              {tab === "worldmap" && <WorldMapTab trips={trips} onEdit={setEditingTrip} />}
-            </>
+      {!sheetUrl ? (
+        <ConnectSheetScreen onConnect={connectSheet} />
+      ) : (
+        <>
+          {!isCustomSheet && sheetConfigured && (
+            <SharedSheetBanner onConnectOwn={() => setSheetModalOpen(true)} />
           )}
-        </main>
-      </div>
+
+          <div className="mx-auto max-w-5xl px-4 sm:px-6 pb-24">
+            <Header
+              syncing={syncing}
+              lastSynced={lastSynced}
+              onRefresh={() => refresh(true)}
+              isCustomSheet={isCustomSheet}
+              onOpenSheetSettings={() => setSheetModalOpen(true)}
+            />
+
+            <nav className="sticky top-0 z-20 -mx-4 sm:-mx-6 px-4 sm:px-6 pt-2 pb-3 backdrop-blur-md" style={{ background: `${BG}E8` }}>
+              <div className="flex gap-1 sm:gap-2 overflow-x-auto rounded-xl p-1" style={{ background: SURFACE, border: `1px solid ${BORDER}` }}>
+                {tabs.map(({ id, label, icon: Icon }) => {
+                  const active = tab === id;
+                  return (
+                    <button key={id} onClick={() => setTab(id)}
+                      className="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 sm:px-4 py-2 text-sm font-medium transition-all duration-200"
+                      style={{ background: active ? SURFACE_RAISED : "transparent", color: active ? ACCENT : MUTED }}>
+                      <Icon size={16} strokeWidth={2.2} />
+                      <span style={{ fontFamily: SANS }}>{label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </nav>
+
+            <main className="mt-6">
+              {loading ? (
+                <FullScreenLoader label="Loading trips from your sheet…" compact />
+              ) : (
+                <>
+                  {tab === "log" && <LogTab trips={trips} onAdd={addTrip} onJump={setTab} />}
+                  {tab === "history" && <HistoryTab trips={trips} onDelete={deleteTrip} onBulkDelete={bulkDeleteTrips} onEdit={setEditingTrip} onImport={importTrips} />}
+                  {tab === "insights" && <InsightsTab trips={trips} />}
+                  {tab === "map" && <MapTab trips={trips} onEdit={setEditingTrip} />}
+                  {tab === "worldmap" && <WorldMapTab trips={trips} onEdit={setEditingTrip} />}
+                </>
+              )}
+            </main>
+          </div>
+        </>
+      )}
+
+      {sheetModalOpen && (
+        <SheetSettingsModal
+          currentUrl={sheetUrl}
+          isCustomSheet={isCustomSheet}
+          hasDefault={sheetConfigured}
+          onConnect={connectSheet}
+          onReset={disconnectSheet}
+          onClose={() => setSheetModalOpen(false)}
+        />
+      )}
 
       {editingTrip && (
         <TripEditModal trip={editingTrip} onClose={() => setEditingTrip(null)} onSave={(fields) => updateTrip(editingTrip.id, fields)} />
@@ -553,14 +608,142 @@ function FontStyles() {
   );
 }
 
-function ConfigBanner() {
+function SheetUrlForm({ initialUrl = "", onSubmit, submitLabel = "Connect" }) {
+  const [url, setUrl] = useState(initialUrl);
+  const [testState, setTestState] = useState("idle"); // idle | testing | ok | error
+  const [testMessage, setTestMessage] = useState("");
+
+  const runTest = async (candidateUrl) => {
+    setTestState("testing");
+    setTestMessage("");
+    try {
+      const trips = await fetchTripsFromSheet(candidateUrl);
+      setTestState("ok");
+      setTestMessage(`Connected — found ${trips.length} trip${trips.length === 1 ? "" : "s"}.`);
+      return true;
+    } catch (e) {
+      setTestState("error");
+      setTestMessage("Couldn't reach that URL. Check it's deployed with \u201cWho has access: Anyone\u201d.");
+      return false;
+    }
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    const clean = url.trim();
+    if (!clean) return;
+    const ok = await runTest(clean);
+    if (ok) onSubmit(clean);
+  };
+
   return (
-    <div className="flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm" style={{ background: DANGER_DIM, color: DANGER, borderBottom: `1px solid ${DANGER}55` }}>
-      <CloudOff size={15} className="shrink-0" />
-      <span>
-        Not connected to a Google Sheet yet — follow the setup notes at the top of this file, then paste your
-        deployed Apps Script URL into <code>SHEET_WEB_APP_URL</code>.
-      </span>
+    <form onSubmit={submit} className="space-y-3">
+      <label className="block">
+        <span className="block text-xs mb-1.5" style={{ color: MUTED }}>Your Apps Script Web App URL</span>
+        <input
+          value={url}
+          onChange={(e) => { setUrl(e.target.value); setTestState("idle"); }}
+          placeholder="https://script.google.com/macros/s/.../exec"
+          className="w-full rounded-lg px-3 py-2.5 text-sm outline-none"
+          style={{ ...inputStyle, fontFamily: "monospace" }}
+        />
+      </label>
+
+      {testState === "ok" && (
+        <div className="flex items-center gap-2 text-sm rounded-lg px-3 py-2" style={{ background: ACCENT_DIM, color: ACCENT }}>
+          <Check size={15} className="shrink-0" /> {testMessage}
+        </div>
+      )}
+      {testState === "error" && (
+        <div className="flex items-center gap-2 text-sm rounded-lg px-3 py-2" style={{ background: DANGER_DIM, color: DANGER }}>
+          <AlertTriangle size={15} className="shrink-0" /> {testMessage}
+        </div>
+      )}
+
+      <button type="submit" disabled={!url.trim() || testState === "testing"}
+        className="w-full flex items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-medium transition-opacity hover:opacity-90 disabled:opacity-60"
+        style={{ background: ACCENT, color: "#1A1408" }}>
+        {testState === "testing" && <Loader2 size={15} className="animate-spin" />}
+        {submitLabel}
+      </button>
+    </form>
+  );
+}
+
+function ConnectSheetScreen({ onConnect }) {
+  return (
+    <div className="min-h-screen flex items-center justify-center px-4">
+      <div className="w-full max-w-sm">
+        <div className="flex flex-col items-center mb-8">
+          <div className="flex h-12 w-12 items-center justify-center rounded-full mb-4" style={{ background: ACCENT_DIM, color: ACCENT }}>
+            <Plane size={22} strokeWidth={2.2} />
+          </div>
+          <h1 style={{ fontFamily: SERIF, fontWeight: 600, fontSize: "1.7rem" }}>Waypoints</h1>
+          <p className="text-sm mt-1 text-center" style={{ color: MUTED }}>Connect a Google Sheet to start tracking.</p>
+        </div>
+        <div className="rounded-2xl p-6" style={{ background: SURFACE, border: `1px solid ${BORDER}` }}>
+          <p className="text-sm mb-4" style={{ color: MUTED }}>
+            Paste the Web App URL from your own Apps Script deployment (see the setup notes in the source file for
+            how to create one — it takes about 5 minutes and is free).
+          </p>
+          <SheetUrlForm onSubmit={onConnect} submitLabel="Connect my sheet" />
+        </div>
+        <p className="text-xs text-center mt-5" style={{ color: MUTED }}>
+          Your URL is stored only in this browser — nobody else sees it, and it's never sent anywhere but your own sheet.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function SharedSheetBanner({ onConnectOwn }) {
+  const [dismissed, setDismissed] = useState(() => {
+    try { return localStorage.getItem(BANNER_DISMISSED_KEY) === "true"; } catch (e) { return false; }
+  });
+  if (dismissed) return null;
+  const dismiss = () => {
+    setDismissed(true);
+    try { localStorage.setItem(BANNER_DISMISSED_KEY, "true"); } catch (e) { /* best effort */ }
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-2.5 text-xs sm:text-sm" style={{ background: ACCENT_DIM, color: ACCENT, borderBottom: `1px solid ${ACCENT}33` }}>
+      <Database size={14} className="shrink-0" />
+      <span className="flex-1 min-w-[200px]">You're viewing the shared sheet this site's owner set up.</span>
+      <button onClick={onConnectOwn} className="underline underline-offset-2 font-medium">Connect your own instead</button>
+      <button onClick={dismiss} aria-label="Dismiss" style={{ color: ACCENT }}><X size={14} /></button>
+    </div>
+  );
+}
+
+function SheetSettingsModal({ currentUrl, isCustomSheet, hasDefault, onConnect, onReset, onClose }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4" style={{ background: "#00000099" }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} className="w-full max-w-md rounded-2xl p-6" style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}` }}>
+        <div className="flex items-center justify-between mb-1">
+          <h3 style={{ fontFamily: SERIF, fontSize: "1.15rem", fontWeight: 600 }}>Connected sheet</h3>
+          <button onClick={onClose} style={{ color: MUTED }}><X size={18} /></button>
+        </div>
+        <p className="text-sm mb-4" style={{ color: MUTED }}>
+          {isCustomSheet
+            ? "You're using your own Google Sheet. This only affects what you see in this browser."
+            : "You're currently using the shared sheet this site's owner connected."}
+        </p>
+
+        <div className="rounded-lg px-3 py-2 mb-4 text-xs break-all" style={{ background: SURFACE, border: `1px solid ${BORDER}`, color: MUTED, fontFamily: "monospace" }}>
+          {currentUrl}
+        </div>
+
+        <div style={{ borderTop: `1px solid ${BORDER}` }} className="pt-4">
+          <p className="text-xs mb-2" style={{ color: MUTED }}>Switch to your own sheet:</p>
+          <SheetUrlForm onSubmit={onConnect} submitLabel="Connect this sheet" />
+        </div>
+
+        {isCustomSheet && hasDefault && (
+          <button onClick={onReset} className="w-full mt-3 rounded-lg py-2.5 text-sm font-medium" style={{ background: SURFACE, border: `1px solid ${BORDER}`, color: MUTED }}>
+            Go back to the shared sheet
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -577,7 +760,7 @@ function FullScreenLoader({ label, compact }) {
 /* Header + sync status                                                     */
 /* ---------------------------------------------------------------------- */
 
-function Header({ syncing, lastSynced, onRefresh }) {
+function Header({ syncing, lastSynced, onRefresh, isCustomSheet, onOpenSheetSettings }) {
   return (
     <header className="pt-8 pb-4 flex items-center justify-between gap-3">
       <div className="flex items-center gap-3 min-w-0">
@@ -589,12 +772,19 @@ function Header({ syncing, lastSynced, onRefresh }) {
           <p className="text-sm mt-0.5 truncate" style={{ color: MUTED }}>Track every border you've crossed.</p>
         </div>
       </div>
-      <button onClick={onRefresh} title="Refresh from Google Sheet"
-        className="flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-medium shrink-0"
-        style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}`, color: MUTED }}>
-        <RefreshCw size={13} className={syncing ? "animate-spin" : ""} style={{ color: syncing ? ACCENT : MUTED }} />
-        <span className="hidden sm:inline">{syncing ? "Syncing…" : `Synced ${timeAgo(lastSynced)}`}</span>
-      </button>
+      <div className="flex items-center gap-2 shrink-0">
+        <button onClick={onOpenSheetSettings} title={isCustomSheet ? "Using your own sheet" : "Connect your own sheet"}
+          className="flex items-center justify-center rounded-full p-2"
+          style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}`, color: isCustomSheet ? ACCENT : MUTED }}>
+          <Database size={13} />
+        </button>
+        <button onClick={onRefresh} title="Refresh from Google Sheet"
+          className="flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-medium"
+          style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}`, color: MUTED }}>
+          <RefreshCw size={13} className={syncing ? "animate-spin" : ""} style={{ color: syncing ? ACCENT : MUTED }} />
+          <span className="hidden sm:inline">{syncing ? "Syncing…" : `Synced ${timeAgo(lastSynced)}`}</span>
+        </button>
+      </div>
     </header>
   );
 }
