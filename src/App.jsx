@@ -3,7 +3,8 @@ import { ComposableMap, Geographies, Geography, Marker } from "@vnedyalk0v/react
 import {
   Plane, MapPin, CalendarDays, Trash2, AlertTriangle, Stamp, ListOrdered,
   BarChart3, PlusCircle, ChevronDown, X, Loader2, Home, Briefcase, Pencil,
-  Download, Upload, Map as MapIcon, RefreshCw, CloudOff,
+  Download, Upload, Map as MapIcon, RefreshCw, CloudOff, Search, StickyNote,
+  Settings2,
 } from "lucide-react";
 
 /* ---------------------------------------------------------------------- */
@@ -40,7 +41,7 @@ import {
 //     let sheet = ss.getSheetByName(SHEET_NAME);
 //     if (!sheet) {
 //       sheet = ss.insertSheet(SHEET_NAME);
-//       sheet.appendRow(["id", "country", "start_date", "end_date", "trip_type", "created_at"]);
+//       sheet.appendRow(["id", "country", "start_date", "end_date", "trip_type", "created_at", "notes", "stops"]);
 //     }
 //     return sheet;
 //   }
@@ -49,9 +50,21 @@ import {
 //     const sheet = getSheet_();
 //     const rows = sheet.getDataRange().getValues();
 //     const headers = rows.shift();
+//     const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
 //     const data = rows
 //       .filter((r) => r[0])
-//       .map((r) => Object.fromEntries(headers.map((h, i) => [h, r[i]])));
+//       .map((r) => {
+//         const obj = {};
+//         headers.forEach((h, i) => {
+//           let v = r[i];
+//           if (h === "start_date" || h === "end_date") {
+//             if (Object.prototype.toString.call(v) === "[object Date]") v = Utilities.formatDate(v, tz, "yyyy-MM-dd");
+//             else if (typeof v === "string" && v.indexOf("T") > -1) v = v.slice(0, 10);
+//           }
+//           obj[h] = v;
+//         });
+//         return obj;
+//       });
 //     return ContentService.createTextOutput(JSON.stringify(data)).setMimeType(ContentService.MimeType.JSON);
 //   }
 //
@@ -59,16 +72,17 @@ import {
 //     const body = JSON.parse(e.postData.contents);
 //     const sheet = getSheet_();
 //     if (body.action === "add") {
-//       sheet.appendRow([body.id, body.country, body.start_date, body.end_date, body.trip_type, new Date().toISOString()]);
+//       sheet.appendRow([body.id, body.country, body.start_date, body.end_date, body.trip_type, new Date().toISOString(), body.notes || "", body.stops || ""]);
 //     } else if (body.action === "bulkAdd") {
 //       body.rows.forEach((r) =>
-//         sheet.appendRow([r.id, r.country, r.start_date, r.end_date, r.trip_type, new Date().toISOString()])
+//         sheet.appendRow([r.id, r.country, r.start_date, r.end_date, r.trip_type, new Date().toISOString(), r.notes || "", r.stops || ""])
 //       );
 //     } else if (body.action === "update") {
 //       const rows = sheet.getDataRange().getValues();
 //       for (let i = 1; i < rows.length; i++) {
 //         if (String(rows[i][0]) === String(body.id)) {
 //           sheet.getRange(i + 1, 1, 1, 5).setValues([[body.id, body.country, body.start_date, body.end_date, body.trip_type]]);
+//           sheet.getRange(i + 1, 7, 1, 2).setValues([[body.notes || "", body.stops || ""]]);
 //           break;
 //         }
 //       }
@@ -82,6 +96,12 @@ import {
 //   }
 //
 // ---- end Apps Script code ----
+//
+// UPGRADING AN EXISTING SHEET: if you already had this set up before notes
+// and stops existed, just add "notes" in cell G1 and "stops" in H1 of your
+// existing header row (row 1) — no need to recreate the sheet. Then replace
+// doGet/doPost with the versions above and redeploy as a New version
+// (Deploy → Manage deployments → pencil icon → Version: New version).
 
 const SHEET_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwtSB-MtyxR1bbMmln4yDCfMJE_9cILhPus_lUQucF0KuKkEcvGrpWWGQJVRthQadqSFg/exec";
 const sheetConfigured = SHEET_WEB_APP_URL !== "YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL";
@@ -106,7 +126,15 @@ async function postToSheet(payload) {
 }
 
 function rowToTrip(row) {
-  return { id: String(row.id), country: row.country, start: row.start_date, end: row.end_date, type: row.trip_type || "personal" };
+  return {
+    id: String(row.id),
+    country: row.country,
+    start: row.start_date,
+    end: row.end_date,
+    type: row.trip_type || "personal",
+    notes: row.notes || "",
+    stops: row.stops ? String(row.stops).split(",").map((s) => s.trim()).filter(Boolean) : [],
+  };
 }
 
 /* ---------------------------------------------------------------------- */
@@ -177,6 +205,51 @@ const COUNTRY_LATLON = {
   "Papua New Guinea": [-6.3, 143.9],
 };
 
+const COUNTRY_ISO2 = {
+  "United States": "US", Canada: "CA", Mexico: "MX", Brazil: "BR", Argentina: "AR",
+  Chile: "CL", Peru: "PE", Colombia: "CO", Cuba: "CU", "Costa Rica": "CR", Panama: "PA",
+  Ecuador: "EC", Uruguay: "UY", Bolivia: "BO", Guatemala: "GT", Jamaica: "JM",
+  "Dominican Republic": "DO",
+  "United Kingdom": "GB", France: "FR", Germany: "DE", Italy: "IT", Spain: "ES",
+  Portugal: "PT", Netherlands: "NL", Switzerland: "CH", Austria: "AT", Belgium: "BE",
+  Greece: "GR", Ireland: "IE", Iceland: "IS", Norway: "NO", Sweden: "SE", Denmark: "DK",
+  Finland: "FI", Poland: "PL", "Czech Republic": "CZ", Hungary: "HU", Croatia: "HR",
+  Romania: "RO", Ukraine: "UA", Malta: "MT", Slovenia: "SI", Slovakia: "SK",
+  Estonia: "EE", Latvia: "LV", Lithuania: "LT", Turkey: "TR",
+  China: "CN", Japan: "JP", "South Korea": "KR", India: "IN", Thailand: "TH",
+  Vietnam: "VN", Indonesia: "ID", Malaysia: "MY", Singapore: "SG", Philippines: "PH",
+  Cambodia: "KH", Laos: "LA", "Sri Lanka": "LK", Nepal: "NP", "United Arab Emirates": "AE",
+  "Saudi Arabia": "SA", Qatar: "QA", Israel: "IL", Jordan: "JO", Taiwan: "TW",
+  "Hong Kong": "HK", Mongolia: "MN", Kazakhstan: "KZ",
+  Egypt: "EG", "South Africa": "ZA", Morocco: "MA", Kenya: "KE", Tanzania: "TZ",
+  Nigeria: "NG", Ghana: "GH", Ethiopia: "ET", Tunisia: "TN", Namibia: "NA",
+  Botswana: "BW", Rwanda: "RW", Senegal: "SN", Uganda: "UG", Zambia: "ZM", Zimbabwe: "ZW",
+  Australia: "AU", "New Zealand": "NZ", Fiji: "FJ", "Papua New Guinea": "PG",
+};
+
+function countryFlag(country) {
+  const iso2 = COUNTRY_ISO2[country];
+  if (!iso2) return "🏳️";
+  return iso2.replace(/./g, (c) => String.fromCodePoint(127397 + c.charCodeAt(0)));
+}
+
+// Local device settings — home country + per-country thresholds. These are
+// personal preferences rather than trip data, so they live in this browser
+// only (not synced to the Sheet).
+const SETTINGS_KEY = "waypoints:settings";
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) { /* ignore */ }
+  return { homeCountry: "", thresholds: {} };
+}
+
+function saveSettings(settings) {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { /* ignore */ }
+}
+
 /* ---------------------------------------------------------------------- */
 /* Design tokens                                                            */
 /* ---------------------------------------------------------------------- */
@@ -225,6 +298,12 @@ function overlapDaysInYear(trip, year) {
   const yEnd = new Date(year, 11, 31);
   const lo = toDate(trip.start) > yStart ? toDate(trip.start) : yStart;
   const hi = toDate(trip.end) < yEnd ? toDate(trip.end) : yEnd;
+  if (hi < lo) return 0;
+  return Math.round((hi - lo) / 86400000) + 1;
+}
+function overlapDaysInRollingWindow(trip, windowStart, windowEnd) {
+  const lo = toDate(trip.start) > windowStart ? toDate(trip.start) : windowStart;
+  const hi = toDate(trip.end) < windowEnd ? toDate(trip.end) : windowEnd;
   if (hi < lo) return 0;
   return Math.round((hi - lo) / 86400000) + 1;
 }
@@ -295,10 +374,13 @@ export default function App() {
   const addTrip = useCallback(
     async (trip) => {
       if (!sheetConfigured) { showToast("Connect your Google Sheet first — see the setup notes at the top of this file."); return; }
-      const newTrip = { ...trip, id: uid() };
+      const newTrip = { ...trip, id: uid(), notes: trip.notes || "", stops: trip.stops || [] };
       setTrips((prev) => [newTrip, ...prev]);
       try {
-        await postToSheet({ action: "add", id: newTrip.id, country: trip.country, start_date: trip.start, end_date: trip.end, trip_type: trip.type });
+        await postToSheet({
+          action: "add", id: newTrip.id, country: trip.country, start_date: trip.start, end_date: trip.end,
+          trip_type: trip.type, notes: trip.notes || "", stops: (trip.stops || []).join(", "),
+        });
         showToast(`${trip.country} logged \u2014 ${inclusiveDays(trip.start, trip.end)} days`);
       } catch (e) {
         setTrips((prev) => prev.filter((t) => t.id !== newTrip.id));
@@ -314,7 +396,10 @@ export default function App() {
       const prevTrips = trips;
       setTrips((p) => p.map((t) => (t.id === id ? { ...t, ...fields } : t)));
       try {
-        await postToSheet({ action: "update", id, country: fields.country, start_date: fields.start, end_date: fields.end, trip_type: fields.type });
+        await postToSheet({
+          action: "update", id, country: fields.country, start_date: fields.start, end_date: fields.end,
+          trip_type: fields.type, notes: fields.notes || "", stops: (fields.stops || []).join(", "),
+        });
         showToast(`${fields.country} updated`);
         setEditingTrip(null);
       } catch (e) {
@@ -340,6 +425,23 @@ export default function App() {
     [trips, showToast]
   );
 
+  const bulkDeleteTrips = useCallback(
+    async (ids) => {
+      if (!sheetConfigured || ids.length === 0) return;
+      const prevTrips = trips;
+      const idSet = new Set(ids);
+      setTrips((p) => p.filter((t) => !idSet.has(t.id)));
+      try {
+        await Promise.all(ids.map((id) => postToSheet({ action: "delete", id })));
+        showToast(`Deleted ${ids.length} trip${ids.length === 1 ? "" : "s"}.`);
+      } catch (e) {
+        setTrips(prevTrips);
+        showToast("Couldn't delete some trips — try again.");
+      }
+    },
+    [trips, showToast]
+  );
+
   const importTrips = useCallback(
     async (file) => {
       if (!file) return;
@@ -355,12 +457,20 @@ export default function App() {
           const start = r?.start || r?.start_date;
           const end = r?.end || r?.end_date;
           const type = r?.type === "business" ? "business" : "personal";
+          const notes = (r?.notes || "").toString();
+          const stops = Array.isArray(r?.stops) ? r.stops : (r?.stops ? String(r.stops).split(",").map((s) => s.trim()).filter(Boolean) : []);
           if (!country || !start || !end || validateTrip({ country, start, end })) { skipped++; return; }
-          rows.push({ id: uid(), country, start_date: start, end_date: end, trip_type: type });
+          rows.push({ id: uid(), country, start_date: start, end_date: end, trip_type: type, notes, stops: stops.join(", ") });
         });
         if (rows.length === 0) { showToast("No valid trips found in that file."); return; }
         await postToSheet({ action: "bulkAdd", rows });
-        setTrips((prev) => [...rows.map((r) => ({ id: r.id, country: r.country, start: r.start_date, end: r.end_date, type: r.trip_type })), ...prev]);
+        setTrips((prev) => [
+          ...rows.map((r) => ({
+            id: r.id, country: r.country, start: r.start_date, end: r.end_date, type: r.trip_type,
+            notes: r.notes, stops: r.stops ? r.stops.split(",").map((s) => s.trim()).filter(Boolean) : [],
+          })),
+          ...prev,
+        ]);
         showToast(`Imported ${rows.length} trip${rows.length === 1 ? "" : "s"}${skipped ? `, skipped ${skipped}` : ""}.`);
       } catch (e) {
         showToast("Couldn't read or import that file.");
@@ -407,7 +517,7 @@ export default function App() {
           ) : (
             <>
               {tab === "log" && <LogTab trips={trips} onAdd={addTrip} onJump={setTab} />}
-              {tab === "history" && <HistoryTab trips={trips} onDelete={deleteTrip} onEdit={setEditingTrip} onImport={importTrips} />}
+              {tab === "history" && <HistoryTab trips={trips} onDelete={deleteTrip} onBulkDelete={bulkDeleteTrips} onEdit={setEditingTrip} onImport={importTrips} />}
               {tab === "insights" && <InsightsTab trips={trips} />}
               {tab === "map" && <MapTab trips={trips} onEdit={setEditingTrip} />}
               {tab === "worldmap" && <WorldMapTab trips={trips} onEdit={setEditingTrip} />}
@@ -493,7 +603,7 @@ function Header({ syncing, lastSynced, onRefresh }) {
 /* Shared trip-form fields (used by Log Trip + Edit modal)                  */
 /* ---------------------------------------------------------------------- */
 
-function TripFormFields({ country, setCountry, start, setStart, end, setEnd, type, setType }) {
+function TripFormFields({ country, setCountry, start, setStart, end, setEnd, type, setType, notes, setNotes, stops, setStops }) {
   return (
     <div className="space-y-4">
       <Field label="Country">
@@ -539,6 +649,34 @@ function TripFormFields({ country, setCountry, start, setStart, end, setEnd, typ
           })}
         </div>
       </Field>
+
+      {setNotes && (
+        <Field label="Notes (optional)">
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="e.g. Conference, family visit…"
+            rows={2}
+            className="w-full rounded-lg px-3 py-2.5 text-sm outline-none resize-none"
+            style={inputStyle}
+          />
+        </Field>
+      )}
+
+      {setStops && (
+        <Field label="Other stops (optional, reference only)">
+          <input
+            value={stops}
+            onChange={(e) => setStops(e.target.value)}
+            placeholder="e.g. Layover in Singapore"
+            className="w-full rounded-lg px-3 py-2.5 text-sm outline-none"
+            style={inputStyle}
+          />
+          <span className="block text-xs mt-1" style={{ color: MUTED }}>
+            Comma-separated. Shown for context only — day counts still track the main country above.
+          </span>
+        </Field>
+      )}
     </div>
   );
 }
@@ -561,6 +699,8 @@ function LogTab({ trips, onAdd, onJump }) {
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
   const [type, setType] = useState("personal");
+  const [notes, setNotes] = useState("");
+  const [stopsText, setStopsText] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -572,9 +712,10 @@ function LogTab({ trips, onAdd, onJump }) {
     if (err) { setError(err); return; }
     setError("");
     setSaving(true);
-    await onAdd({ country: country.trim(), start, end, type });
+    const stops = stopsText.split(",").map((s) => s.trim()).filter(Boolean);
+    await onAdd({ country: country.trim(), start, end, type, notes: notes.trim(), stops });
     setSaving(false);
-    setCountry(""); setStart(""); setEnd(""); setType("personal");
+    setCountry(""); setStart(""); setEnd(""); setType("personal"); setNotes(""); setStopsText("");
   };
 
   const recent = [...trips].sort((a, b) => toDate(b.start) - toDate(a.start)).slice(0, 4);
@@ -585,7 +726,10 @@ function LogTab({ trips, onAdd, onJump }) {
         <h2 style={{ fontFamily: SERIF, fontSize: "1.15rem", fontWeight: 600 }}>New trip</h2>
         <p className="text-sm mt-1 mb-5" style={{ color: MUTED }}>Add a country and the dates you were there. Days are counted inclusively.</p>
 
-        <TripFormFields country={country} setCountry={setCountry} start={start} setStart={setStart} end={end} setEnd={setEnd} type={type} setType={setType} />
+        <TripFormFields
+          country={country} setCountry={setCountry} start={start} setStart={setStart} end={end} setEnd={setEnd}
+          type={type} setType={setType} notes={notes} setNotes={setNotes} stops={stopsText} setStops={setStopsText}
+        />
 
         {previewDays !== null && (
           <div className="text-sm rounded-lg px-3 py-2 mt-4" style={{ background: ACCENT_DIM, color: ACCENT }}>
@@ -616,6 +760,7 @@ function LogTab({ trips, onAdd, onJump }) {
               <li key={t.id} className="flex items-center justify-between text-sm gap-2">
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
+                    <span aria-hidden="true">{countryFlag(t.country)}</span>
                     <span style={{ fontFamily: SANS, fontWeight: 500 }} className="truncate">{t.country}</span>
                     <TypeBadge type={t.type} />
                   </div>
@@ -647,6 +792,8 @@ function TripEditModal({ trip, onClose, onSave }) {
   const [start, setStart] = useState(trip.start);
   const [end, setEnd] = useState(trip.end);
   const [type, setType] = useState(trip.type || "personal");
+  const [notes, setNotes] = useState(trip.notes || "");
+  const [stopsText, setStopsText] = useState((trip.stops || []).join(", "));
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -656,7 +803,8 @@ function TripEditModal({ trip, onClose, onSave }) {
     if (err) { setError(err); return; }
     setError("");
     setSaving(true);
-    await onSave({ country: country.trim(), start, end, type });
+    const stops = stopsText.split(",").map((s) => s.trim()).filter(Boolean);
+    await onSave({ country: country.trim(), start, end, type, notes: notes.trim(), stops });
     setSaving(false);
   };
 
@@ -668,7 +816,10 @@ function TripEditModal({ trip, onClose, onSave }) {
           <button type="button" onClick={onClose} style={{ color: MUTED }}><X size={18} /></button>
         </div>
 
-        <TripFormFields country={country} setCountry={setCountry} start={start} setStart={setStart} end={end} setEnd={setEnd} type={type} setType={setType} />
+        <TripFormFields
+          country={country} setCountry={setCountry} start={start} setStart={setStart} end={end} setEnd={setEnd}
+          type={type} setType={setType} notes={notes} setNotes={setNotes} stops={stopsText} setStops={setStopsText}
+        />
 
         {error && (
           <div className="flex items-center gap-2 text-sm rounded-lg px-3 py-2 mt-4" style={{ background: DANGER_DIM, color: DANGER }}>
@@ -696,15 +847,48 @@ function TripEditModal({ trip, onClose, onSave }) {
 /* History tab                                                              */
 /* ---------------------------------------------------------------------- */
 
-function HistoryTab({ trips, onDelete, onEdit, onImport }) {
+function HistoryTab({ trips, onDelete, onBulkDelete, onEdit, onImport }) {
   const [confirmId, setConfirmId] = useState(null);
   const [typeFilter, setTypeFilter] = useState("all");
+  const [query, setQuery] = useState("");
+  const [sortBy, setSortBy] = useState("newest"); // newest | oldest | country | longest
+  const [selected, setSelected] = useState(() => new Set());
+  const [bulkConfirm, setBulkConfirm] = useState(false);
   const fileInputRef = useRef(null);
 
-  const sorted = useMemo(
-    () => [...trips].filter((t) => typeFilter === "all" || (t.type || "personal") === typeFilter).sort((a, b) => toDate(b.start) - toDate(a.start)),
-    [trips, typeFilter]
-  );
+  const sorted = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    let list = trips
+      .filter((t) => typeFilter === "all" || (t.type || "personal") === typeFilter)
+      .filter((t) => !q || t.country.toLowerCase().includes(q));
+    switch (sortBy) {
+      case "oldest": list = list.sort((a, b) => toDate(a.start) - toDate(b.start)); break;
+      case "country": list = list.sort((a, b) => a.country.localeCompare(b.country)); break;
+      case "longest": list = list.sort((a, b) => inclusiveDays(b.start, b.end) - inclusiveDays(a.start, a.end)); break;
+      default: list = list.sort((a, b) => toDate(b.start) - toDate(a.start));
+    }
+    return list;
+  }, [trips, typeFilter, query, sortBy]);
+
+  // Drop any selected ids that no longer match the current filter/search
+  useEffect(() => {
+    setSelected((prev) => {
+      const visible = new Set(sorted.map((t) => t.id));
+      const next = new Set([...prev].filter((id) => visible.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [sorted]);
+
+  const toggleSelect = (id) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleSelectAll = () => {
+    setSelected((prev) => (prev.size === sorted.length ? new Set() : new Set(sorted.map((t) => t.id))));
+  };
 
   const handleExport = () => {
     const blob = new Blob([JSON.stringify(trips, null, 2)], { type: "application/json" });
@@ -740,71 +924,131 @@ function HistoryTab({ trips, onDelete, onEdit, onImport }) {
     );
   }
 
+  const SORT_OPTIONS = [
+    { id: "newest", label: "Newest first" },
+    { id: "oldest", label: "Oldest first" },
+    { id: "country", label: "Country A–Z" },
+    { id: "longest", label: "Longest first" },
+  ];
+
   return (
     <div className="rounded-2xl overflow-hidden" style={{ background: SURFACE, border: `1px solid ${BORDER}` }}>
-      <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-4" style={{ borderBottom: `1px solid ${BORDER}` }}>
-        <div>
-          <h2 style={{ fontFamily: SERIF, fontSize: "1.15rem", fontWeight: 600 }}>All trips</h2>
-          <p className="text-sm mt-1" style={{ color: MUTED }}>{sorted.length} of {trips.length} trips, most recent first</p>
+      <div className="px-6 py-4 space-y-3" style={{ borderBottom: `1px solid ${BORDER}` }}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 style={{ fontFamily: SERIF, fontSize: "1.15rem", fontWeight: 600 }}>All trips</h2>
+            <p className="text-sm mt-1" style={{ color: MUTED }}>{sorted.length} of {trips.length} trips</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <TypeFilter value={typeFilter} onChange={setTypeFilter} />
+            <button onClick={handleExport} title="Export trips as JSON"
+              className="flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium"
+              style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}`, color: MUTED }}>
+              <Download size={14} /> <span className="hidden sm:inline">Export</span>
+            </button>
+            <button onClick={() => fileInputRef.current?.click()} title="Import trips from JSON"
+              className="flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium"
+              style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}`, color: MUTED }}>
+              <Upload size={14} /> <span className="hidden sm:inline">Import</span>
+            </button>
+            <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={handleImportChange} />
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <TypeFilter value={typeFilter} onChange={setTypeFilter} />
-          <button onClick={handleExport} title="Export trips as JSON"
-            className="flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium"
-            style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}`, color: MUTED }}>
-            <Download size={14} /> <span className="hidden sm:inline">Export</span>
-          </button>
-          <button onClick={() => fileInputRef.current?.click()} title="Import trips from JSON"
-            className="flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium"
-            style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}`, color: MUTED }}>
-            <Upload size={14} /> <span className="hidden sm:inline">Import</span>
-          </button>
-          <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={handleImportChange} />
+
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative flex-1 min-w-[160px]">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: MUTED }} />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by country…"
+              className="w-full rounded-lg pl-8 pr-3 py-2 text-sm outline-none"
+              style={inputStyle}
+            />
+          </div>
+          <div className="relative">
+            <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}
+              className="appearance-none rounded-lg pl-3 pr-8 py-2 text-sm outline-none cursor-pointer"
+              style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}`, color: TEXT }}>
+              {SORT_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+            </select>
+            <ChevronDown size={13} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2" style={{ color: MUTED }} />
+          </div>
         </div>
-      </div>
-      {sorted.length === 0 ? (
-        <div className="px-6 py-10 text-sm text-center" style={{ color: MUTED }}>No trips match this filter.</div>
-      ) : (
-        <ul>
-          {sorted.map((t, i) => (
-            <li key={t.id} className="flex items-center justify-between gap-3 px-6 py-4" style={{ borderBottom: i < sorted.length - 1 ? `1px solid ${BORDER}` : "none" }}>
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="hidden sm:flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold" style={{ background: SURFACE_RAISED, color: CONTINENT_ACCENT[continentOf(t.country)] }}>
-                  {t.country.slice(0, 2).toUpperCase()}
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <span style={{ fontFamily: SANS, fontWeight: 500 }} className="truncate">{t.country}</span>
-                    <TypeBadge type={t.type} />
-                  </div>
-                  <div className="flex items-center gap-1.5 text-xs mt-0.5" style={{ color: MUTED }}>
-                    <CalendarDays size={12} /> {formatRange(t.start, t.end)}
-                  </div>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <span className="rounded-full px-2.5 py-1 text-xs font-medium" style={{ background: SURFACE_RAISED, color: TEAL }}>
-                  {inclusiveDays(t.start, t.end)}d
-                </span>
-                <button onClick={() => onEdit(t)} aria-label={`Edit trip to ${t.country}`} className="rounded-md p-1.5" style={{ color: MUTED }}>
-                  <Pencil size={16} />
+
+        {selected.size > 0 && (
+          <div className="flex items-center justify-between gap-3 rounded-lg px-3 py-2" style={{ background: DANGER_DIM }}>
+            <span className="text-sm" style={{ color: TEXT }}>{selected.size} selected</span>
+            {bulkConfirm ? (
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => { onBulkDelete([...selected]); setSelected(new Set()); setBulkConfirm(false); }}
+                  className="rounded-md px-2.5 py-1 text-xs font-medium" style={{ background: DANGER, color: "#1A0A0C" }}>
+                  Confirm delete
                 </button>
-                {confirmId === t.id ? (
-                  <div className="flex items-center gap-1.5">
-                    <button onClick={() => { onDelete(t.id); setConfirmId(null); }} className="rounded-md px-2 py-1 text-xs font-medium" style={{ background: DANGER, color: "#1A0A0C" }}>
-                      Confirm
-                    </button>
-                    <button onClick={() => setConfirmId(null)} className="rounded-md px-2 py-1 text-xs" style={{ color: MUTED }}>Cancel</button>
-                  </div>
-                ) : (
-                  <button onClick={() => setConfirmId(t.id)} aria-label={`Delete trip to ${t.country}`} className="rounded-md p-1.5" style={{ color: MUTED }}>
-                    <Trash2 size={16} />
-                  </button>
-                )}
+                <button onClick={() => setBulkConfirm(false)} className="rounded-md px-2.5 py-1 text-xs" style={{ color: MUTED }}>Cancel</button>
               </div>
-            </li>
-          ))}
-        </ul>
+            ) : (
+              <button onClick={() => setBulkConfirm(true)} className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium" style={{ color: DANGER }}>
+                <Trash2 size={13} /> Delete selected
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {sorted.length === 0 ? (
+        <div className="px-6 py-10 text-sm text-center" style={{ color: MUTED }}>No trips match this search/filter.</div>
+      ) : (
+        <>
+          <div className="flex items-center gap-2 px-6 py-2 text-xs" style={{ color: MUTED, borderBottom: `1px solid ${BORDER}` }}>
+            <input type="checkbox" checked={selected.size === sorted.length} onChange={toggleSelectAll} className="accent-current" />
+            Select all
+          </div>
+          <ul>
+            {sorted.map((t, i) => (
+              <li key={t.id} className="flex items-center justify-between gap-3 px-6 py-4" style={{ borderBottom: i < sorted.length - 1 ? `1px solid ${BORDER}` : "none" }}>
+                <div className="flex items-center gap-3 min-w-0">
+                  <input type="checkbox" checked={selected.has(t.id)} onChange={() => toggleSelect(t.id)} className="accent-current shrink-0" />
+                  <span className="hidden sm:inline text-lg shrink-0" aria-hidden="true">{countryFlag(t.country)}</span>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span style={{ fontFamily: SANS, fontWeight: 500 }} className="truncate">{t.country}</span>
+                      <TypeBadge type={t.type} />
+                      {t.notes && <StickyNote size={12} style={{ color: MUTED }} aria-label="Has notes" />}
+                    </div>
+                    <div className="flex items-center gap-1.5 text-xs mt-0.5" style={{ color: MUTED }}>
+                      <CalendarDays size={12} /> {formatRange(t.start, t.end)}
+                    </div>
+                    {t.stops && t.stops.length > 0 && (
+                      <div className="text-xs mt-0.5" style={{ color: MUTED }}>Also: {t.stops.join(", ")}</div>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="rounded-full px-2.5 py-1 text-xs font-medium" style={{ background: SURFACE_RAISED, color: TEAL }}>
+                    {inclusiveDays(t.start, t.end)}d
+                  </span>
+                  <button onClick={() => onEdit(t)} aria-label={`Edit trip to ${t.country}`} className="rounded-md p-1.5" style={{ color: MUTED }}>
+                    <Pencil size={16} />
+                  </button>
+                  {confirmId === t.id ? (
+                    <div className="flex items-center gap-1.5">
+                      <button onClick={() => { onDelete(t.id); setConfirmId(null); }} className="rounded-md px-2 py-1 text-xs font-medium" style={{ background: DANGER, color: "#1A0A0C" }}>
+                        Confirm
+                      </button>
+                      <button onClick={() => setConfirmId(null)} className="rounded-md px-2 py-1 text-xs" style={{ color: MUTED }}>Cancel</button>
+                    </div>
+                  ) : (
+                    <button onClick={() => setConfirmId(t.id)} aria-label={`Delete trip to ${t.country}`} className="rounded-md p-1.5" style={{ color: MUTED }}>
+                      <Trash2 size={16} />
+                    </button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </div>
   );
@@ -824,12 +1068,30 @@ function InsightsTab({ trips }) {
 
   const [year, setYear] = useState(years[0]);
   const [typeFilter, setTypeFilter] = useState("all");
+  const [windowMode, setWindowMode] = useState("calendar"); // calendar | rolling
+  const [settings, setSettings] = useState(loadSettings);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [editingThreshold, setEditingThreshold] = useState(null); // country currently being edited
   useEffect(() => { if (!years.includes(year)) setYear(years[0]); }, [years]); // eslint-disable-line
+
+  const updateSettings = (next) => {
+    setSettings(next);
+    saveSettings(next);
+  };
+
+  const rollingRange = useMemo(() => {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - 364);
+    return { start, end };
+  }, []);
 
   const byCountry = useMemo(() => {
     const map = {};
     trips.filter((t) => typeFilter === "all" || (t.type || "personal") === typeFilter).forEach((t) => {
-      const d = overlapDaysInYear(t, year);
+      const d = windowMode === "rolling"
+        ? overlapDaysInRollingWindow(t, rollingRange.start, rollingRange.end)
+        : overlapDaysInYear(t, year);
       if (d <= 0) return;
       const kind = t.type || "personal";
       if (!map[t.country]) map[t.country] = { country: t.country, days: 0, personal: 0, business: 0 };
@@ -837,63 +1099,131 @@ function InsightsTab({ trips }) {
       map[t.country][kind] += d;
     });
     return Object.values(map).sort((a, b) => b.days - a.days);
-  }, [trips, year, typeFilter]);
+  }, [trips, year, typeFilter, windowMode, rollingRange]);
+
+  const thresholdFor = (country) => settings.thresholds[country] || RESIDENCY_THRESHOLD;
+  const isHome = (country) => settings.homeCountry && country === settings.homeCountry;
 
   const totalDays = byCountry.reduce((s, c) => s + c.days, 0);
-  const overThreshold = byCountry.filter((c) => c.days > RESIDENCY_THRESHOLD);
+  const overThreshold = byCountry.filter((c) => !isHome(c.country) && c.days > thresholdFor(c.country));
+
+  const periodLabel = windowMode === "rolling" ? "the last 365 days" : `${year}`;
+
+  const saveThreshold = (country, value) => {
+    const num = parseInt(value, 10);
+    const next = { ...settings, thresholds: { ...settings.thresholds } };
+    if (!num || num === RESIDENCY_THRESHOLD) delete next.thresholds[country];
+    else next.thresholds[country] = num;
+    updateSettings(next);
+    setEditingThreshold(null);
+  };
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 style={{ fontFamily: SERIF, fontSize: "1.3rem", fontWeight: 600 }}>Insights</h2>
-          <p className="text-sm mt-1" style={{ color: MUTED }}>Total days per country, by year</p>
+          <p className="text-sm mt-1" style={{ color: MUTED }}>Total days per country, {periodLabel}</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
           <TypeFilter value={typeFilter} onChange={setTypeFilter} />
-          <div className="relative">
-            <select value={year} onChange={(e) => setYear(Number(e.target.value))}
-              className="appearance-none rounded-lg pl-4 pr-9 py-2.5 text-sm font-medium outline-none cursor-pointer"
-              style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}`, color: TEXT }}>
-              {years.map((y) => <option key={y} value={y}>{y}</option>)}
-            </select>
-            <ChevronDown size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2" style={{ color: MUTED }} />
+          <div className="flex gap-1 rounded-lg p-1" style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}` }}>
+            {[{ id: "calendar", label: "Calendar year" }, { id: "rolling", label: "Rolling 365d" }].map((o) => (
+              <button key={o.id} onClick={() => setWindowMode(o.id)}
+                className="rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors"
+                style={{ background: windowMode === o.id ? SURFACE : "transparent", color: windowMode === o.id ? ACCENT : MUTED }}>
+                {o.label}
+              </button>
+            ))}
           </div>
+          {windowMode === "calendar" && (
+            <div className="relative">
+              <select value={year} onChange={(e) => setYear(Number(e.target.value))}
+                className="appearance-none rounded-lg pl-4 pr-9 py-2.5 text-sm font-medium outline-none cursor-pointer"
+                style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}`, color: TEXT }}>
+                {years.map((y) => <option key={y} value={y}>{y}</option>)}
+              </select>
+              <ChevronDown size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2" style={{ color: MUTED }} />
+            </div>
+          )}
+          <button onClick={() => setSettingsOpen((s) => !s)} title="Home country & thresholds"
+            className="flex items-center justify-center rounded-lg p-2.5"
+            style={{ background: settingsOpen ? SURFACE : SURFACE_RAISED, border: `1px solid ${BORDER}`, color: settingsOpen ? ACCENT : MUTED }}>
+            <Settings2 size={15} />
+          </button>
         </div>
       </div>
+
+      {settingsOpen && (
+        <div className="rounded-xl p-4 flex flex-wrap items-center gap-3" style={{ background: SURFACE, border: `1px solid ${BORDER}` }}>
+          <label className="flex items-center gap-2 text-sm" style={{ color: MUTED }}>
+            Home country:
+            <select
+              value={settings.homeCountry}
+              onChange={(e) => updateSettings({ ...settings, homeCountry: e.target.value })}
+              className="rounded-lg px-2.5 py-1.5 text-sm outline-none"
+              style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}`, color: TEXT }}>
+              <option value="">None</option>
+              {COUNTRY_LIST.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
+          <span className="text-xs" style={{ color: MUTED }}>
+            Your home country never triggers the threshold warning. Click any day count below to set a custom threshold for that country (default {RESIDENCY_THRESHOLD}).
+          </span>
+        </div>
+      )}
 
       {overThreshold.length > 0 && (
         <div className="flex items-start gap-3 rounded-xl px-4 py-3" style={{ background: DANGER_DIM, border: `1px solid ${DANGER}55` }}>
           <AlertTriangle size={18} style={{ color: DANGER }} className="shrink-0 mt-0.5" />
           <div className="text-sm" style={{ color: TEXT }}>
-            <span style={{ fontWeight: 600 }}>Residency threshold exceeded</span> in {year}: {overThreshold.map((c) => c.country).join(", ")} — over {RESIDENCY_THRESHOLD} days.
+            <span style={{ fontWeight: 600 }}>Threshold exceeded</span> in {periodLabel}: {overThreshold.map((c) => `${c.country} (${thresholdFor(c.country)}d)`).join(", ")}.
           </div>
         </div>
       )}
 
       {byCountry.length === 0 ? (
-        <EmptyState text={`No trips recorded for ${year}.`} />
+        <EmptyState text={windowMode === "rolling" ? "No trips in the last 365 days." : `No trips recorded for ${year}.`} />
       ) : (
         <div className="rounded-2xl p-6" style={{ background: SURFACE, border: `1px solid ${BORDER}` }}>
           <div className="text-sm mb-5" style={{ color: MUTED }}>
-            {totalDays} total travel {totalDays === 1 ? "day" : "days"} across {byCountry.length} {byCountry.length === 1 ? "country" : "countries"} in {year}
+            {totalDays} total travel {totalDays === 1 ? "day" : "days"} across {byCountry.length} {byCountry.length === 1 ? "country" : "countries"}
           </div>
           <div className="space-y-4">
             {byCountry.map(({ country, days, personal, business }) => {
-              const over = days > RESIDENCY_THRESHOLD;
-              const personalPct = Math.min(100, (personal / RESIDENCY_THRESHOLD) * 100);
-              const businessPct = Math.min(100 - personalPct, (business / RESIDENCY_THRESHOLD) * 100);
+              const threshold = thresholdFor(country);
+              const home = isHome(country);
+              const over = !home && days > threshold;
+              const personalPct = Math.min(100, (personal / threshold) * 100);
+              const businessPct = Math.min(100 - personalPct, (business / threshold) * 100);
+              const editing = editingThreshold === country;
               return (
                 <div key={country}>
                   <div className="flex items-center justify-between text-sm mb-1.5">
                     <span style={{ fontFamily: SANS, fontWeight: 500, color: TEXT }} className="flex items-center gap-1.5">
-                      {country}{over && <AlertTriangle size={13} style={{ color: DANGER }} />}
+                      <span aria-hidden="true">{countryFlag(country)}</span>
+                      {country}
+                      {home && <span className="text-xs rounded-full px-1.5 py-0.5" style={{ background: ACCENT_DIM, color: ACCENT }}>home</span>}
+                      {over && <AlertTriangle size={13} style={{ color: DANGER }} />}
                     </span>
-                    <span style={{ color: over ? DANGER : MUTED, fontWeight: over ? 600 : 400 }}>
-                      {days}d{typeFilter === "all" && personal > 0 && business > 0 && (
-                        <span style={{ color: MUTED, fontWeight: 400 }}> ({personal}p / {business}b)</span>
-                      )}
-                    </span>
+                    {editing ? (
+                      <input
+                        type="number"
+                        autoFocus
+                        defaultValue={threshold}
+                        onBlur={(e) => saveThreshold(country, e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") saveThreshold(country, e.target.value); if (e.key === "Escape") setEditingThreshold(null); }}
+                        className="w-16 rounded-md px-1.5 py-0.5 text-xs text-right outline-none"
+                        style={inputStyle}
+                      />
+                    ) : (
+                      <button onClick={() => setEditingThreshold(country)} className="text-right" style={{ color: over ? DANGER : MUTED, fontWeight: over ? 600 : 400 }}>
+                        {days}d{typeFilter === "all" && personal > 0 && business > 0 && (
+                          <span style={{ color: MUTED, fontWeight: 400 }}> ({personal}p / {business}b)</span>
+                        )}
+                        <span style={{ color: MUTED, fontWeight: 400 }}> / {threshold}</span>
+                      </button>
+                    )}
                   </div>
                   <div className="h-2 rounded-full overflow-hidden flex" style={{ background: SURFACE_RAISED }}>
                     <div className="h-full transition-all duration-500" style={{ width: `${personalPct}%`, background: over ? DANGER : TEAL }} />
@@ -906,7 +1236,8 @@ function InsightsTab({ trips }) {
           <div className="mt-5 pt-4 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs" style={{ borderTop: `1px solid ${BORDER}`, color: MUTED }}>
             <span className="flex items-center gap-1.5"><span className="inline-block h-2 w-2 rounded-full" style={{ background: TEAL }} /> personal</span>
             <span className="flex items-center gap-1.5"><span className="inline-block h-2 w-2 rounded-full" style={{ background: BUSINESS }} /> business</span>
-            <span className="flex items-center gap-1.5"><span className="inline-block h-2 w-2 rounded-full" style={{ background: DANGER }} /> over {RESIDENCY_THRESHOLD} days</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block h-2 w-2 rounded-full" style={{ background: DANGER }} /> over threshold</span>
+            <span>Click a day count to set a custom threshold.</span>
           </div>
         </div>
       )}
