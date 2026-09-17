@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { ComposableMap, Geographies, Geography, Marker } from "@vnedyalk0v/react19-simple-maps";
+import { ComposableMap, Geographies, Geography, Marker, ZoomableGroup } from "@vnedyalk0v/react19-simple-maps";
 import {
   Plane, MapPin, CalendarDays, Trash2, AlertTriangle, Stamp, ListOrdered,
   BarChart3, PlusCircle, ChevronDown, X, Loader2, Home, Briefcase, Pencil,
   Download, Upload, Map as MapIcon, RefreshCw, Search, StickyNote,
-  Settings2, Database, Check,
+  Settings2, Database, Check, ZoomIn, ZoomOut, Maximize,
 } from "lucide-react";
 
 /* ---------------------------------------------------------------------- */
@@ -188,6 +188,18 @@ const CONTINENT_ACCENT = {
 };
 const RESIDENCY_THRESHOLD = 183;
 const WORLD_GEO_URL = "https://unpkg.com/world-atlas@2.0.2/countries-110m.json";
+
+// This TopoJSON labels a few countries slightly differently than our own
+// country names (confirmed against the actual file — e.g. it calls the US
+// "United States of America"). This maps our names to the alternate labels
+// worth trying when matching a country to its shape on the outline map.
+const COUNTRY_MAP_NAME_ALIASES = {
+  "United States": ["United States of America"],
+  "Czech Republic": ["Czechia"],
+  "South Korea": ["Republic of Korea", "Korea"],
+  Laos: ["Lao PDR"],
+  "Dominican Republic": ["Dominican Rep."],
+};
 
 const COUNTRY_LATLON = {
   "United States": [39.8, -98.6], Canada: [56.1, -106.3], Mexico: [23.6, -102.5],
@@ -1563,6 +1575,15 @@ function CountryTripsModal({ entry, onClose, onEdit }) {
 function WorldMapTab({ trips, onEdit }) {
   const [selected, setSelected] = useState(null);
   const [typeFilter, setTypeFilter] = useState("all");
+  const [viewMode, setViewMode] = useState("dots"); // dots | outline
+  const [zoom, setZoom] = useState(1);
+  const [center, setCenter] = useState([0, 20]);
+
+  const MIN_ZOOM = 1;
+  const MAX_ZOOM = 8;
+  const zoomIn = () => setZoom((z) => Math.min(MAX_ZOOM, z * 1.5));
+  const zoomOut = () => setZoom((z) => Math.max(MIN_ZOOM, z / 1.5));
+  const resetView = () => { setZoom(1); setCenter([0, 20]); };
 
   const filteredTrips = useMemo(() => trips.filter((t) => typeFilter === "all" || (t.type || "personal") === typeFilter), [trips, typeFilter]);
 
@@ -1588,6 +1609,18 @@ function WorldMapTab({ trips, onEdit }) {
   const unmapped = [...new Set(filteredTrips.filter((t) => !COUNTRY_LATLON[t.country]).map((t) => t.country))];
   const continentsShown = [...new Set(entries.map((e) => continentOf(e.country)))];
 
+  // Index visited countries by every name variant that might appear as
+  // geo.properties.name on the map shapes, so the outline view can match
+  // them regardless of small naming differences.
+  const visitedByShapeName = useMemo(() => {
+    const index = {};
+    entries.forEach((entry) => {
+      const names = [entry.country, ...(COUNTRY_MAP_NAME_ALIASES[entry.country] || [])];
+      names.forEach((n) => { index[n.toLowerCase().trim()] = entry; });
+    });
+    return index;
+  }, [entries]);
+
   if (trips.length === 0) return <EmptyState text="Log a trip to see it appear on the map." />;
 
   return (
@@ -1595,49 +1628,109 @@ function WorldMapTab({ trips, onEdit }) {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 style={{ fontFamily: SERIF, fontSize: "1.3rem", fontWeight: 600 }}>World map</h2>
-          <p className="text-sm mt-1" style={{ color: MUTED }}>Dot size and glow track days spent — click a country to see its trips.</p>
+          <p className="text-sm mt-1" style={{ color: MUTED }}>
+            {viewMode === "outline" ? "Visited countries light up — click one to see its trips." : "Dot size and glow track days spent — click a country to see its trips."}
+          </p>
         </div>
-        <TypeFilter value={typeFilter} onChange={setTypeFilter} />
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex gap-1 rounded-lg p-1" style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}` }}>
+            {[{ id: "dots", label: "Dots" }, { id: "outline", label: "Outline" }].map((o) => (
+              <button key={o.id} onClick={() => setViewMode(o.id)}
+                className="rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors"
+                style={{ background: viewMode === o.id ? SURFACE : "transparent", color: viewMode === o.id ? ACCENT : MUTED }}>
+                {o.label}
+              </button>
+            ))}
+          </div>
+          <TypeFilter value={typeFilter} onChange={setTypeFilter} />
+        </div>
       </div>
 
       {entries.length === 0 ? (
         <EmptyState text="No trips match this filter." />
       ) : (
-        <div className="rounded-2xl p-4 sm:p-6" style={{ background: SURFACE, border: `1px solid ${BORDER}` }}>
+        <div className="relative rounded-2xl p-4 sm:p-6" style={{ background: SURFACE, border: `1px solid ${BORDER}` }}>
+          <div className="absolute right-6 top-6 z-10 flex flex-col gap-1 rounded-lg p-1" style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}` }}>
+            <button onClick={zoomIn} title="Zoom in" aria-label="Zoom in"
+              className="flex items-center justify-center rounded-md p-1.5" style={{ color: MUTED }}>
+              <ZoomIn size={15} />
+            </button>
+            <button onClick={zoomOut} title="Zoom out" aria-label="Zoom out"
+              className="flex items-center justify-center rounded-md p-1.5" style={{ color: MUTED }}>
+              <ZoomOut size={15} />
+            </button>
+            <button onClick={resetView} title="Reset view" aria-label="Reset view"
+              className="flex items-center justify-center rounded-md p-1.5" style={{ color: MUTED }}>
+              <Maximize size={15} />
+            </button>
+          </div>
+
           <ComposableMap projectionConfig={{ scale: 148 }} style={{ width: "100%", height: "auto" }}>
+            <ZoomableGroup
+              zoom={zoom}
+              center={center}
+              minZoom={MIN_ZOOM}
+              maxZoom={MAX_ZOOM}
+              onMoveEnd={({ zoom: z, coordinates }) => { setZoom(z); setCenter(coordinates); }}
+            >
             <Geographies geography={WORLD_GEO_URL}>
               {({ geographies }) =>
-                geographies.map((geo) => (
-                  <Geography
-                    key={geo.rsmKey}
-                    geography={geo}
-                    fill={SURFACE_RAISED}
-                    stroke={BORDER}
-                    strokeWidth={0.5}
-                    style={{
-                      default: { outline: "none" },
-                      hover: { outline: "none", fill: SURFACE_RAISED },
-                      pressed: { outline: "none" },
-                    }}
-                  />
-                ))
+                geographies.map((geo) => {
+                  if (viewMode !== "outline") {
+                    return (
+                      <Geography
+                        key={geo.rsmKey}
+                        geography={geo}
+                        fill={SURFACE_RAISED}
+                        stroke={BORDER}
+                        strokeWidth={0.5 / zoom}
+                        style={{ default: { outline: "none" }, hover: { outline: "none", fill: SURFACE_RAISED }, pressed: { outline: "none" } }}
+                      />
+                    );
+                  }
+                  const shapeName = (geo.properties?.name || "").toLowerCase().trim();
+                  const entry = visitedByShapeName[shapeName];
+                  const ratio = entry ? entry.days / maxDays : 0;
+                  const over = entry && entry.days > RESIDENCY_THRESHOLD;
+                  const color = entry ? CONTINENT_ACCENT[continentOf(entry.country)] : SURFACE_RAISED;
+                  const fillOpacity = entry ? 0.4 + 0.5 * ratio : 1;
+                  return (
+                    <Geography
+                      key={geo.rsmKey}
+                      geography={geo}
+                      onClick={() => entry && setSelected(entry)}
+                      fill={color}
+                      fillOpacity={fillOpacity}
+                      stroke={over ? DANGER : BORDER}
+                      strokeWidth={(over ? 1.2 : 0.5) / zoom}
+                      style={{
+                        default: { outline: "none", cursor: entry ? "pointer" : "default", transition: "fill-opacity 0.2s" },
+                        hover: { outline: "none", fill: color, fillOpacity: entry ? Math.min(1, fillOpacity + 0.15) : 1 },
+                        pressed: { outline: "none" },
+                      }}
+                    >
+                      {entry && <title>{`${entry.country} — ${entry.days}d`}</title>}
+                    </Geography>
+                  );
+                })
               }
             </Geographies>
 
-            {entries.map((entry) => {
+            {viewMode === "dots" && entries.map((entry) => {
               const [lat, lon] = COUNTRY_LATLON[entry.country];
               const ratio = entry.days / maxDays;
-              const r = 5 + 9 * ratio;
+              const r = (5 + 9 * ratio) / zoom;
               const over = entry.days > RESIDENCY_THRESHOLD;
               const color = CONTINENT_ACCENT[continentOf(entry.country)];
               return (
                 <Marker key={entry.country} coordinates={[lon, lat]} onClick={() => setSelected(entry)} style={{ cursor: "pointer" }}>
                   <title>{`${entry.country} — ${entry.days}d`}</title>
-                  <circle r={r + 5} fill={color} opacity={0.15} />
-                  <circle r={r} fill={color} opacity={0.45 + 0.55 * ratio} stroke={over ? DANGER : "none"} strokeWidth={over ? 1.5 : 0} />
+                  <circle r={r + 5 / zoom} fill={color} opacity={0.15} />
+                  <circle r={r} fill={color} opacity={0.45 + 0.55 * ratio} stroke={over ? DANGER : "none"} strokeWidth={(over ? 1.5 : 0) / zoom} />
                 </Marker>
               );
             })}
+            </ZoomableGroup>
           </ComposableMap>
 
           <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs" style={{ color: MUTED }}>
@@ -1648,6 +1741,7 @@ function WorldMapTab({ trips, onEdit }) {
             ))}
             <span className="flex items-center gap-1.5">
               <span className="inline-block h-2 w-2 rounded-full" style={{ background: DANGER }} /> over {RESIDENCY_THRESHOLD} days
+
             </span>
           </div>
         </div>
