@@ -361,6 +361,17 @@ export default function App() {
   const [syncing, setSyncing] = useState(false);
   const [lastSynced, setLastSynced] = useState(null);
   const [tab, setTab] = useState("log");
+  const [historySearchSeed, setHistorySearchSeed] = useState("");
+
+  const changeTab = useCallback((id) => {
+    setHistorySearchSeed(""); // normal navigation shouldn't carry over a stale search
+    setTab(id);
+  }, []);
+
+  const viewCountryInHistory = useCallback((country) => {
+    setHistorySearchSeed(country);
+    setTab("history");
+  }, []);
   const [toast, setToast] = useState(null);
   const [editingTrip, setEditingTrip] = useState(null);
   const [sheetModalOpen, setSheetModalOpen] = useState(false);
@@ -554,7 +565,7 @@ export default function App() {
                 {tabs.map(({ id, label, icon: Icon }) => {
                   const active = tab === id;
                   return (
-                    <button key={id} onClick={() => setTab(id)}
+                    <button key={id} onClick={() => changeTab(id)}
                       className="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 sm:px-4 py-2 text-sm font-medium transition-all duration-200"
                       style={{ background: active ? SURFACE_RAISED : "transparent", color: active ? ACCENT : MUTED }}>
                       <Icon size={16} strokeWidth={2.2} />
@@ -570,9 +581,9 @@ export default function App() {
                 <FullScreenLoader label="Loading trips from your sheet…" compact />
               ) : (
                 <>
-                  {tab === "log" && <LogTab trips={trips} onAdd={addTrip} onJump={setTab} />}
-                  {tab === "history" && <HistoryTab trips={trips} onDelete={deleteTrip} onBulkDelete={bulkDeleteTrips} onEdit={setEditingTrip} onImport={importTrips} />}
-                  {tab === "insights" && <InsightsTab trips={trips} />}
+                  {tab === "log" && <LogTab trips={trips} onAdd={addTrip} onJump={changeTab} />}
+                  {tab === "history" && <HistoryTab trips={trips} onDelete={deleteTrip} onBulkDelete={bulkDeleteTrips} onEdit={setEditingTrip} onImport={importTrips} initialQuery={historySearchSeed} />}
+                  {tab === "insights" && <InsightsTab trips={trips} onViewCountry={viewCountryInHistory} />}
                   {tab === "map" && <MapTab trips={trips} onEdit={setEditingTrip} />}
                   {tab === "worldmap" && <WorldMapTab trips={trips} onEdit={setEditingTrip} />}
                 </>
@@ -1049,20 +1060,32 @@ function TripEditModal({ trip, onClose, onSave }) {
 /* History tab                                                              */
 /* ---------------------------------------------------------------------- */
 
-function HistoryTab({ trips, onDelete, onBulkDelete, onEdit, onImport }) {
+function HistoryTab({ trips, onDelete, onBulkDelete, onEdit, onImport, initialQuery = "" }) {
   const [confirmId, setConfirmId] = useState(null);
   const [typeFilter, setTypeFilter] = useState("all");
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const [sortBy, setSortBy] = useState("newest"); // newest | oldest | country | longest
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [selected, setSelected] = useState(() => new Set());
   const [bulkConfirm, setBulkConfirm] = useState(false);
   const fileInputRef = useRef(null);
 
   const sorted = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const from = dateFrom ? toDate(dateFrom) : null;
+    const to = dateTo ? toDate(dateTo) : null;
     let list = trips
       .filter((t) => typeFilter === "all" || (t.type || "personal") === typeFilter)
-      .filter((t) => !q || t.country.toLowerCase().includes(q));
+      .filter((t) => !q || t.country.toLowerCase().includes(q))
+      .filter((t) => {
+        if (!from && !to) return true;
+        const tStart = toDate(t.start);
+        const tEnd = toDate(t.end);
+        if (from && tEnd < from) return false; // trip ended before the range starts
+        if (to && tStart > to) return false; // trip starts after the range ends
+        return true;
+      });
     switch (sortBy) {
       case "oldest": list = list.sort((a, b) => toDate(a.start) - toDate(b.start)); break;
       case "country": list = list.sort((a, b) => a.country.localeCompare(b.country)); break;
@@ -1070,7 +1093,7 @@ function HistoryTab({ trips, onDelete, onBulkDelete, onEdit, onImport }) {
       default: list = list.sort((a, b) => toDate(b.start) - toDate(a.start));
     }
     return list;
-  }, [trips, typeFilter, query, sortBy]);
+  }, [trips, typeFilter, query, sortBy, dateFrom, dateTo]);
 
   // Drop any selected ids that no longer match the current filter/search
   useEffect(() => {
@@ -1178,6 +1201,34 @@ function HistoryTab({ trips, onDelete, onBulkDelete, onEdit, onImport }) {
           </div>
         </div>
 
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs shrink-0" style={{ color: MUTED }}>Travel dates:</span>
+          <input
+            type="date"
+            value={dateFrom}
+            max={dateTo || undefined}
+            onChange={(e) => setDateFrom(e.target.value)}
+            className="rounded-lg px-2.5 py-1.5 text-xs outline-none"
+            style={inputStyle}
+          />
+          <span className="text-xs" style={{ color: MUTED }}>to</span>
+          <input
+            type="date"
+            value={dateTo}
+            min={dateFrom || undefined}
+            onChange={(e) => setDateTo(e.target.value)}
+            className="rounded-lg px-2.5 py-1.5 text-xs outline-none"
+            style={inputStyle}
+          />
+          {(dateFrom || dateTo) && (
+            <button onClick={() => { setDateFrom(""); setDateTo(""); }}
+              className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs"
+              style={{ color: MUTED }}>
+              <X size={12} /> Clear
+            </button>
+          )}
+        </div>
+
         {selected.size > 0 && (
           <div className="flex items-center justify-between gap-3 rounded-lg px-3 py-2" style={{ background: DANGER_DIM }}>
             <span className="text-sm" style={{ color: TEXT }}>{selected.size} selected</span>
@@ -1260,7 +1311,7 @@ function HistoryTab({ trips, onDelete, onBulkDelete, onEdit, onImport }) {
 /* Insights tab                                                             */
 /* ---------------------------------------------------------------------- */
 
-function InsightsTab({ trips }) {
+function InsightsTab({ trips, onViewCountry }) {
   const years = useMemo(() => {
     const s = new Set();
     trips.forEach((t) => { s.add(toDate(t.start).getFullYear()); s.add(toDate(t.end).getFullYear()); });
@@ -1403,8 +1454,14 @@ function InsightsTab({ trips }) {
                 <div key={country}>
                   <div className="flex items-center justify-between text-sm mb-1.5">
                     <span style={{ fontFamily: SANS, fontWeight: 500, color: TEXT }} className="flex items-center gap-1.5">
-                      <span aria-hidden="true">{countryFlag(country)}</span>
-                      {country}
+                      <button
+                        onClick={() => onViewCountry(country)}
+                        title={`View ${country} trips in History`}
+                        className="flex items-center gap-1.5 hover:underline underline-offset-2"
+                      >
+                        <span aria-hidden="true">{countryFlag(country)}</span>
+                        {country}
+                      </button>
                       {home && <span className="text-xs rounded-full px-1.5 py-0.5" style={{ background: ACCENT_DIM, color: ACCENT }}>home</span>}
                       {over && <AlertTriangle size={13} style={{ color: DANGER }} />}
                     </span>
@@ -1439,7 +1496,7 @@ function InsightsTab({ trips }) {
             <span className="flex items-center gap-1.5"><span className="inline-block h-2 w-2 rounded-full" style={{ background: TEAL }} /> personal</span>
             <span className="flex items-center gap-1.5"><span className="inline-block h-2 w-2 rounded-full" style={{ background: BUSINESS }} /> business</span>
             <span className="flex items-center gap-1.5"><span className="inline-block h-2 w-2 rounded-full" style={{ background: DANGER }} /> over threshold</span>
-            <span>Click a day count to set a custom threshold.</span>
+            <span>Click a country name to see its trips, or a day count to set a custom threshold.</span>
           </div>
         </div>
       )}
