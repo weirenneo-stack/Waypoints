@@ -4,7 +4,8 @@ import {
   Plane, MapPin, CalendarDays, Trash2, AlertTriangle, Stamp, ListOrdered,
   BarChart3, PlusCircle, ChevronDown, X, Loader2, Home, Briefcase, Pencil,
   Download, Upload, Map as MapIcon, RefreshCw, Search, StickyNote,
-  Settings2, Database, Check, ZoomIn, ZoomOut, Maximize,
+  Settings2, Database, Check, ZoomIn, ZoomOut, Maximize, Calendar,
+  ChevronLeft, ChevronRight,
 } from "lucide-react";
 
 /* ---------------------------------------------------------------------- */
@@ -314,6 +315,19 @@ function formatRange(startStr, endStr) {
   const opts = { month: "short", day: "numeric", year: "numeric" };
   return `${toDate(startStr).toLocaleDateString("en-US", opts)} \u2192 ${toDate(endStr).toLocaleDateString("en-US", opts)}`;
 }
+function startOfMonth(date) { return new Date(date.getFullYear(), date.getMonth(), 1); }
+function addMonths(date, n) { return new Date(date.getFullYear(), date.getMonth() + n, 1); }
+function isSameDay(a, b) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
+function dateKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+function buildMonthGrid(monthDate) {
+  const year = monthDate.getFullYear();
+  const month = monthDate.getMonth();
+  const startWeekday = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const totalCells = Math.ceil((startWeekday + daysInMonth) / 7) * 7;
+  const gridStart = new Date(year, month, 1 - startWeekday);
+  return Array.from({ length: totalCells }, (_, i) => new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + i));
+}
 function continentOf(country) {
   return COUNTRY_CONTINENT[country] || "Other";
 }
@@ -534,6 +548,7 @@ export default function App() {
   const tabs = [
     { id: "log", label: "Log Trip", icon: PlusCircle },
     { id: "history", label: "History", icon: ListOrdered },
+    { id: "calendar", label: "Calendar", icon: Calendar },
     { id: "insights", label: "Insights", icon: BarChart3 },
     { id: "map", label: "Stamp Wall", icon: Stamp },
     { id: "worldmap", label: "World Map", icon: MapIcon },
@@ -583,6 +598,7 @@ export default function App() {
                 <>
                   {tab === "log" && <LogTab trips={trips} onAdd={addTrip} onJump={changeTab} />}
                   {tab === "history" && <HistoryTab trips={trips} onDelete={deleteTrip} onBulkDelete={bulkDeleteTrips} onEdit={setEditingTrip} onImport={importTrips} initialQuery={historySearchSeed} />}
+                  {tab === "calendar" && <CalendarTab trips={trips} onEdit={setEditingTrip} />}
                   {tab === "insights" && <InsightsTab trips={trips} onViewCountry={viewCountryInHistory} />}
                   {tab === "map" && <MapTab trips={trips} onEdit={setEditingTrip} />}
                   {tab === "worldmap" && <WorldMapTab trips={trips} onEdit={setEditingTrip} />}
@@ -1302,6 +1318,134 @@ function HistoryTab({ trips, onDelete, onBulkDelete, onEdit, onImport, initialQu
             ))}
           </ul>
         </>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/* Calendar tab                                                             */
+/* ---------------------------------------------------------------------- */
+
+function CalendarTab({ trips, onEdit }) {
+  const [monthDate, setMonthDate] = useState(() => startOfMonth(new Date()));
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [selected, setSelected] = useState(null);
+
+  const gridDays = useMemo(() => buildMonthGrid(monthDate), [monthDate]);
+
+  const filteredTrips = useMemo(
+    () => trips.filter((t) => typeFilter === "all" || (t.type || "personal") === typeFilter),
+    [trips, typeFilter]
+  );
+
+  // Map of "YYYY-MM-DD" -> Set of countries active that day, built once per
+  // visible month rather than re-scanning trips per cell.
+  const dayMap = useMemo(() => {
+    const map = new Map();
+    const gridStart = gridDays[0];
+    const gridEnd = gridDays[gridDays.length - 1];
+    filteredTrips.forEach((t) => {
+      const tStart = toDate(t.start);
+      const tEnd = toDate(t.end);
+      const lo = tStart > gridStart ? tStart : gridStart;
+      const hi = tEnd < gridEnd ? tEnd : gridEnd;
+      if (hi < lo) return;
+      for (let d = new Date(lo); d <= hi; d.setDate(d.getDate() + 1)) {
+        const key = dateKey(d);
+        if (!map.has(key)) map.set(key, new Set());
+        map.get(key).add(t.country);
+      }
+    });
+    return map;
+  }, [filteredTrips, gridDays]);
+
+  const byCountry = useMemo(() => {
+    const map = {};
+    filteredTrips.forEach((t) => {
+      const d = inclusiveDays(t.start, t.end);
+      if (!map[t.country]) map[t.country] = { country: t.country, days: 0, trips: [] };
+      map[t.country].days += d;
+      map[t.country].trips.push(t);
+    });
+    return map;
+  }, [filteredTrips]);
+
+  if (trips.length === 0) return <EmptyState text="Log a trip to see it on the calendar." />;
+
+  const today = new Date();
+  const monthLabel = monthDate.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h2 style={{ fontFamily: SERIF, fontSize: "1.3rem", fontWeight: 600 }}>Calendar</h2>
+          <p className="text-sm mt-1" style={{ color: MUTED }}>Flags mark the days you were traveling — overlapping trips stack in the same day.</p>
+        </div>
+        <TypeFilter value={typeFilter} onChange={setTypeFilter} />
+      </div>
+
+      <div className="rounded-2xl p-4 sm:p-6" style={{ background: SURFACE, border: `1px solid ${BORDER}` }}>
+        <div className="flex items-center justify-between mb-4">
+          <button onClick={() => setMonthDate((d) => addMonths(d, -1))} aria-label="Previous month"
+            className="rounded-lg p-2" style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}`, color: MUTED }}>
+            <ChevronLeft size={16} />
+          </button>
+          <div className="flex items-center gap-3">
+            <h3 style={{ fontFamily: SERIF, fontSize: "1.05rem", fontWeight: 600 }}>{monthLabel}</h3>
+            <button onClick={() => setMonthDate(startOfMonth(new Date()))}
+              className="text-xs rounded-full px-2.5 py-1" style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}`, color: MUTED }}>
+              Today
+            </button>
+          </div>
+          <button onClick={() => setMonthDate((d) => addMonths(d, 1))} aria-label="Next month"
+            className="rounded-lg p-2" style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}`, color: MUTED }}>
+            <ChevronRight size={16} />
+          </button>
+        </div>
+
+        <div className="grid grid-cols-7 gap-1 text-center text-xs mb-1" style={{ color: MUTED }}>
+          {WEEKDAY_LABELS.map((d) => <div key={d} className="py-1">{d}</div>)}
+        </div>
+
+        <div className="grid grid-cols-7 gap-1">
+          {gridDays.map((day) => {
+            const inMonth = day.getMonth() === monthDate.getMonth();
+            const isToday = isSameDay(day, today);
+            const countries = [...(dayMap.get(dateKey(day)) || [])];
+            return (
+              <div key={dateKey(day)}
+                className="rounded-lg p-1.5 flex flex-col min-h-[58px] sm:min-h-[78px]"
+                style={{
+                  background: inMonth ? SURFACE_RAISED : "transparent",
+                  border: `1px solid ${isToday ? ACCENT : inMonth ? BORDER : "transparent"}`,
+                  opacity: inMonth ? 1 : 0.35,
+                }}>
+                <span className="text-xs" style={{ color: isToday ? ACCENT : MUTED, fontWeight: isToday ? 700 : 400 }}>
+                  {day.getDate()}
+                </span>
+                {countries.length > 0 && (
+                  <div className="flex flex-wrap gap-0.5 mt-1">
+                    {countries.slice(0, 4).map((c) => (
+                      <button key={c} onClick={() => setSelected(byCountry[c])} title={c} className="text-sm sm:text-base leading-none">
+                        {countryFlag(c)}
+                      </button>
+                    ))}
+                    {countries.length > 4 && (
+                      <span className="text-[10px] self-center" style={{ color: MUTED }}>+{countries.length - 4}</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {selected && (
+        <CountryTripsModal entry={selected} onClose={() => setSelected(null)} onEdit={(t) => { setSelected(null); onEdit(t); }} />
       )}
     </div>
   );
