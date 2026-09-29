@@ -682,7 +682,13 @@ export default function App() {
                 <>
                   {tab === "log" && <LogTab trips={trips} onAdd={addTrip} onJump={changeTab} />}
                   {tab === "history" && <HistoryTab trips={trips} onDelete={deleteTrip} onBulkDelete={bulkDeleteTrips} onEdit={setEditingTrip} onImport={importTrips} initialQuery={historySearchSeed} />}
-                  {tab === "calendar" && <CalendarTab trips={trips} onEdit={setEditingTrip} />}
+                  {tab === "calendar" && (
+                    <CalendarTab
+                      trips={trips}
+                      onEdit={setEditingTrip}
+                      onQuickAdd={(dateStr) => setEditingTrip({ country: "", start: dateStr, end: dateStr, type: "personal", notes: "", stops: [] })}
+                    />
+                  )}
                   {tab === "insights" && <InsightsTab trips={trips} onViewCountry={viewCountryInHistory} />}
                   {tab === "map" && <MapTab trips={trips} onEdit={setEditingTrip} />}
                   {tab === "worldmap" && <WorldMapTab trips={trips} onEdit={setEditingTrip} />}
@@ -705,7 +711,15 @@ export default function App() {
       )}
 
       {editingTrip && (
-        <TripEditModal trip={editingTrip} onClose={() => setEditingTrip(null)} onSave={(fields) => updateTrip(editingTrip.id, fields)} />
+        <TripEditModal
+          trip={editingTrip}
+          isNew={!editingTrip.id}
+          onClose={() => setEditingTrip(null)}
+          onSave={async (fields) => {
+            if (editingTrip.id) { await updateTrip(editingTrip.id, fields); }
+            else { await addTrip(fields); setEditingTrip(null); }
+          }}
+        />
       )}
 
       {toast && (
@@ -1100,7 +1114,7 @@ function LogTab({ trips, onAdd, onJump }) {
 /* Edit modal                                                               */
 /* ---------------------------------------------------------------------- */
 
-function TripEditModal({ trip, onClose, onSave }) {
+function TripEditModal({ trip, onClose, onSave, isNew = false }) {
   const [country, setCountry] = useState(trip.country);
   const [start, setStart] = useState(trip.start);
   const [end, setEnd] = useState(trip.end);
@@ -1125,7 +1139,7 @@ function TripEditModal({ trip, onClose, onSave }) {
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4" style={{ background: "#00000099" }} onClick={onClose}>
       <form onClick={(e) => e.stopPropagation()} onSubmit={submit} className="w-full max-w-md rounded-2xl p-6" style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}` }}>
         <div className="flex items-center justify-between mb-4">
-          <h3 style={{ fontFamily: SERIF, fontSize: "1.15rem", fontWeight: 600 }}>Edit trip</h3>
+          <h3 style={{ fontFamily: SERIF, fontSize: "1.15rem", fontWeight: 600 }}>{isNew ? "Log trip" : "Edit trip"}</h3>
           <button type="button" onClick={onClose} style={{ color: MUTED }}><X size={18} /></button>
         </div>
 
@@ -1148,7 +1162,7 @@ function TripEditModal({ trip, onClose, onSave }) {
             className="flex-1 flex items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-medium transition-opacity hover:opacity-90 disabled:opacity-60"
             style={{ background: ACCENT, color: "#1A1408" }}>
             {saving && <Loader2 size={15} className="animate-spin" />}
-            Save changes
+            {isNew ? "Save trip" : "Save changes"}
           </button>
         </div>
       </form>
@@ -1411,7 +1425,7 @@ function HistoryTab({ trips, onDelete, onBulkDelete, onEdit, onImport, initialQu
 /* Calendar tab                                                             */
 /* ---------------------------------------------------------------------- */
 
-function CalendarTab({ trips, onEdit }) {
+function CalendarTab({ trips, onEdit, onQuickAdd }) {
   const [monthDate, setMonthDate] = useState(() => startOfMonth(new Date()));
   const [typeFilter, setTypeFilter] = useState("all");
   const [selected, setSelected] = useState(null);
@@ -1444,6 +1458,14 @@ function CalendarTab({ trips, onEdit }) {
     return map;
   }, [filteredTrips, gridDays]);
 
+  // Finds the specific trip behind a country's flag on a given day, so
+  // clicking the flag jumps straight to editing that entry rather than a
+  // list of every trip to that country.
+  const tripForDay = (day, country) => {
+    const matches = filteredTrips.filter((t) => t.country === country && toDate(t.start) <= day && day <= toDate(t.end));
+    return matches[0] || null;
+  };
+
   const byCountry = useMemo(() => {
     const map = {};
     filteredTrips.forEach((t) => {
@@ -1466,7 +1488,7 @@ function CalendarTab({ trips, onEdit }) {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 style={{ fontFamily: SERIF, fontSize: "1.3rem", fontWeight: 600 }}>Calendar</h2>
-          <p className="text-sm mt-1" style={{ color: MUTED }}>Flags mark the days you were traveling — overlapping trips stack in the same day.</p>
+          <p className="text-sm mt-1" style={{ color: MUTED }}>Flags mark the days you were traveling — click a flag to edit that trip, or an empty day to log a new one.</p>
         </div>
         <TypeFilter value={typeFilter} onChange={setTypeFilter} />
       </div>
@@ -1498,10 +1520,13 @@ function CalendarTab({ trips, onEdit }) {
           {gridDays.map((day) => {
             const inMonth = day.getMonth() === monthDate.getMonth();
             const isToday = isSameDay(day, today);
-            const countries = [...(dayMap.get(dateKey(day)) || [])];
+            const key = dateKey(day);
+            const countries = [...(dayMap.get(key) || [])];
             return (
-              <div key={dateKey(day)}
-                className="rounded-lg p-1.5 flex flex-col min-h-[58px] sm:min-h-[78px]"
+              <div key={key}
+                onClick={() => onQuickAdd && onQuickAdd(key)}
+                title="Log a trip on this day"
+                className="rounded-lg p-1.5 flex flex-col min-h-[58px] sm:min-h-[78px] cursor-pointer transition-colors hover:brightness-110"
                 style={{
                   background: inMonth ? SURFACE_RAISED : "transparent",
                   border: `1px solid ${isToday ? ACCENT : inMonth ? BORDER : "transparent"}`,
@@ -1513,7 +1538,13 @@ function CalendarTab({ trips, onEdit }) {
                 {countries.length > 0 && (
                   <div className="flex flex-wrap gap-0.5 mt-1">
                     {countries.slice(0, 4).map((c) => (
-                      <button key={c} onClick={() => setSelected(byCountry[c])} title={c} className="text-sm sm:text-base leading-none">
+                      <button key={c}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const t = tripForDay(day, c);
+                          if (t) onEdit(t); else setSelected(byCountry[c]);
+                        }}
+                        title={`Edit ${c} trip`} className="text-sm sm:text-base leading-none">
                         {countryFlag(c)}
                       </button>
                     ))}
