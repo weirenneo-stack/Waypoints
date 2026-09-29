@@ -691,7 +691,7 @@ export default function App() {
                       onQuickAdd={(dateStr) => setEditingTrip({ country: "", start: dateStr, end: dateStr, type: "personal", notes: "", stops: [] })}
                     />
                   )}
-                  {tab === "insights" && <InsightsTab trips={trips} onViewCountry={viewCountryInHistory} />}
+                  {tab === "insights" && <InsightsTab trips={trips} onEdit={setEditingTrip} />}
                   {tab === "map" && <MapTab trips={trips} onEdit={setEditingTrip} />}
                   {tab === "worldmap" && <WorldMapTab trips={trips} onEdit={setEditingTrip} />}
                 </>
@@ -1572,7 +1572,7 @@ function CalendarTab({ trips, onEdit, onQuickAdd }) {
 /* Insights tab                                                             */
 /* ---------------------------------------------------------------------- */
 
-function InsightsTab({ trips, onViewCountry }) {
+function InsightsTab({ trips, onEdit }) {
   const years = useMemo(() => {
     const s = new Set();
     trips.forEach((t) => { s.add(toDate(t.start).getFullYear()); s.add(toDate(t.end).getFullYear()); });
@@ -1581,7 +1581,8 @@ function InsightsTab({ trips, onViewCountry }) {
   }, [trips]);
 
   const [year, setYear] = useState(years[0]);
-  const [typeFilter, setTypeFilter] = useState("all");
+  const [typeFilters, setTypeFilters] = useState(() => Object.keys(TRIP_TYPES)); // any combo of 1-3 types
+  const [selected, setSelected] = useState(null); // country entry shown in the trips modal
   const [windowMode, setWindowMode] = useState("calendar"); // calendar | rolling | custom
   const [customFrom, setCustomFrom] = useState(() => `${new Date().getFullYear()}-01-01`);
   const [customTo, setCustomTo] = useState(() => new Date().toISOString().slice(0, 10));
@@ -1606,7 +1607,7 @@ function InsightsTab({ trips, onViewCountry }) {
 
   const byCountry = useMemo(() => {
     const map = {};
-    trips.filter((t) => typeFilter === "all" || (t.type || "personal") === typeFilter).forEach((t) => {
+    trips.filter((t) => typeFilters.includes(t.type || "personal")).forEach((t) => {
       const d = windowMode === "rolling"
         ? overlapDaysInRollingWindow(t, rollingRange.start, rollingRange.end)
         : windowMode === "custom"
@@ -1614,12 +1615,19 @@ function InsightsTab({ trips, onViewCountry }) {
         : overlapDaysInYear(t, year);
       if (d <= 0) return;
       const kind = t.type || "personal";
-      if (!map[t.country]) map[t.country] = { country: t.country, days: 0, byType: {} };
+      if (!map[t.country]) map[t.country] = { country: t.country, days: 0, byType: {}, trips: [] };
       map[t.country].days += d;
       map[t.country].byType[kind] = (map[t.country].byType[kind] || 0) + d;
+      map[t.country].trips.push(t);
     });
     return Object.values(map).sort((a, b) => b.days - a.days);
-  }, [trips, year, typeFilter, windowMode, rollingRange, customFrom, customTo, customRangeValid]);
+  }, [trips, year, typeFilters, windowMode, rollingRange, customFrom, customTo, customRangeValid]);
+
+  useEffect(() => {
+    if (!selected) return;
+    const fresh = byCountry.find((c) => c.country === selected.country);
+    setSelected(fresh || null);
+  }, [byCountry]); // eslint-disable-line
 
   const thresholdFor = (country) => settings.thresholds[country] || RESIDENCY_THRESHOLD;
   const isHome = (country) => settings.homeCountry && country === settings.homeCountry;
@@ -1650,7 +1658,7 @@ function InsightsTab({ trips, onViewCountry }) {
           <p className="text-sm mt-1" style={{ color: MUTED }}>Total days per country, {periodLabel}</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <TypeFilter value={typeFilter} onChange={setTypeFilter} />
+          <TypeMultiFilter value={typeFilters} onChange={setTypeFilters} />
           <div className="flex gap-1 rounded-lg p-1" style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}` }}>
             {[{ id: "calendar", label: "Calendar year" }, { id: "rolling", label: "Rolling 365d" }, { id: "custom", label: "Custom range" }].map((o) => (
               <button key={o.id} onClick={() => setWindowMode(o.id)}
@@ -1727,7 +1735,8 @@ function InsightsTab({ trips, onViewCountry }) {
             {totalDays} total travel {totalDays === 1 ? "day" : "days"} across {byCountry.length} {byCountry.length === 1 ? "country" : "countries"}
           </div>
           <div className="space-y-4">
-            {byCountry.map(({ country, days, byType }) => {
+            {byCountry.map((entry) => {
+              const { country, days, byType } = entry;
               const threshold = thresholdFor(country);
               const home = isHome(country);
               const over = !home && days > threshold;
@@ -1744,8 +1753,8 @@ function InsightsTab({ trips, onViewCountry }) {
                   <div className="flex items-center justify-between text-sm mb-1.5">
                     <span style={{ fontFamily: SANS, fontWeight: 500, color: TEXT }} className="flex items-center gap-1.5">
                       <button
-                        onClick={() => onViewCountry(country)}
-                        title={`View ${country} trips in History`}
+                        onClick={() => setSelected(entry)}
+                        title={`View ${country} trips`}
                         className="flex items-center gap-1.5 hover:underline underline-offset-2"
                       >
                         <span aria-hidden="true">{countryFlag(country)}</span>
@@ -1766,14 +1775,15 @@ function InsightsTab({ trips, onViewCountry }) {
                       />
                     ) : (
                       <button onClick={() => setEditingThreshold(country)} className="text-right" style={{ color: over ? DANGER : MUTED, fontWeight: over ? 600 : 400 }}>
-                        {days}d{typeFilter === "all" && activeKinds.length > 1 && (
+                        {days}d{activeKinds.length > 1 && (
                           <span style={{ color: MUTED, fontWeight: 400 }}> ({activeKinds.map((k) => `${byType[k]}${k[0]}`).join(" / ")})</span>
                         )}
                         <span style={{ color: MUTED, fontWeight: 400 }}> / {threshold}</span>
                       </button>
                     )}
                   </div>
-                  <div className="h-2 rounded-full overflow-hidden flex" style={{ background: SURFACE_RAISED }}>
+                  <div onClick={() => setSelected(entry)} title={`View ${country} trips`}
+                    className="h-2 rounded-full overflow-hidden flex cursor-pointer" style={{ background: SURFACE_RAISED }}>
                     {segments.map((s, i) => (
                       <div key={s.key} className="h-full transition-all duration-500"
                         style={{ width: `${s.pct}%`, background: over ? (i === 0 ? DANGER : `${DANGER}AA`) : s.color }} />
@@ -1790,9 +1800,13 @@ function InsightsTab({ trips, onViewCountry }) {
               </span>
             ))}
             <span className="flex items-center gap-1.5"><span className="inline-block h-2 w-2 rounded-full" style={{ background: DANGER }} /> over threshold</span>
-            <span>Click a country name to see its trips, or a day count to set a custom threshold.</span>
+            <span>Click a country or its bar to see its trips, or a day count to set a custom threshold.</span>
           </div>
         </div>
+      )}
+
+      {selected && (
+        <CountryTripsModal entry={selected} onClose={() => setSelected(null)} onEdit={(t) => { setSelected(null); onEdit(t); }} />
       )}
     </div>
   );
@@ -2162,6 +2176,35 @@ function TypeFilter({ value, onChange }) {
           <button key={o.id} onClick={() => onChange(o.id)} className="flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors"
             style={{ background: active ? SURFACE : "transparent", color: active ? o.color : MUTED }}>
             {Icon && <Icon size={12} />} {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Like TypeFilter, but lets more than one trip type be active at once —
+// used by Insights so you can combine e.g. Personal + Home while excluding
+// Business, rather than only ever isolating a single type.
+function TypeMultiFilter({ value, onChange }) {
+  const toggle = (key) => {
+    if (value.includes(key)) {
+      if (value.length === 1) return; // always keep at least one type selected
+      onChange(value.filter((k) => k !== key));
+    } else {
+      onChange([...value, key]);
+    }
+  };
+  return (
+    <div className="flex gap-1 rounded-lg p-1" style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}` }}>
+      {Object.entries(TRIP_TYPES).map(([key, meta]) => {
+        const active = value.includes(key);
+        const Icon = meta.icon;
+        return (
+          <button key={key} type="button" onClick={() => toggle(key)} title={active ? `Hide ${meta.label}` : `Show ${meta.label}`}
+            className="flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors"
+            style={{ background: active ? SURFACE : "transparent", color: active ? meta.color : MUTED }}>
+            {Icon && <Icon size={12} />} {meta.label}
           </button>
         );
       })}
