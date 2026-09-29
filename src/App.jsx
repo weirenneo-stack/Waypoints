@@ -291,13 +291,15 @@ const TEAL = "#4FB3A9";
 const DANGER = "#E2596B";
 const DANGER_DIM = "#3A2126";
 const BUSINESS = "#8AADE8";
+const HOME_TYPE_COLOR = "#C9A6E0";
 const SERIF = "'Fraunces', ui-serif, Georgia, serif";
 const SANS = "'Inter', ui-sans-serif, system-ui, sans-serif";
 const inputStyle = { background: SURFACE_RAISED, border: `1px solid ${BORDER}`, color: TEXT };
 
 const TRIP_TYPES = {
-  personal: { label: "Personal", icon: Home, color: TEAL },
+  personal: { label: "Personal", icon: Plane, color: TEAL },
   business: { label: "Business", icon: Briefcase, color: BUSINESS },
+  home: { label: "Home", icon: Home, color: HOME_TYPE_COLOR },
 };
 
 /* ---------------------------------------------------------------------- */
@@ -606,7 +608,7 @@ export default function App() {
           const country = (r?.country || "").toString().trim();
           const start = r?.start || r?.start_date;
           const end = r?.end || r?.end_date;
-          const type = r?.type === "business" ? "business" : "personal";
+          const type = Object.prototype.hasOwnProperty.call(TRIP_TYPES, r?.type) ? r.type : "personal";
           const notes = (r?.notes || "").toString();
           const stops = Array.isArray(r?.stops) ? r.stops : (r?.stops ? String(r.stops).split(",").map((s) => s.trim()).filter(Boolean) : []);
           if (!country || !start || !end || validateTrip({ country, start, end })) { skipped++; return; }
@@ -962,7 +964,7 @@ function TripFormFields({ country, setCountry, start, setStart, end, setEnd, typ
       </div>
 
       <Field label="Trip type">
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-2">
           {Object.entries(TRIP_TYPES).map(([key, meta]) => {
             const Icon = meta.icon;
             const active = type === key;
@@ -1612,9 +1614,9 @@ function InsightsTab({ trips, onViewCountry }) {
         : overlapDaysInYear(t, year);
       if (d <= 0) return;
       const kind = t.type || "personal";
-      if (!map[t.country]) map[t.country] = { country: t.country, days: 0, personal: 0, business: 0 };
+      if (!map[t.country]) map[t.country] = { country: t.country, days: 0, byType: {} };
       map[t.country].days += d;
-      map[t.country][kind] += d;
+      map[t.country].byType[kind] = (map[t.country].byType[kind] || 0) + d;
     });
     return Object.values(map).sort((a, b) => b.days - a.days);
   }, [trips, year, typeFilter, windowMode, rollingRange, customFrom, customTo, customRangeValid]);
@@ -1725,12 +1727,17 @@ function InsightsTab({ trips, onViewCountry }) {
             {totalDays} total travel {totalDays === 1 ? "day" : "days"} across {byCountry.length} {byCountry.length === 1 ? "country" : "countries"}
           </div>
           <div className="space-y-4">
-            {byCountry.map(({ country, days, personal, business }) => {
+            {byCountry.map(({ country, days, byType }) => {
               const threshold = thresholdFor(country);
               const home = isHome(country);
               const over = !home && days > threshold;
-              const personalPct = Math.min(100, (personal / threshold) * 100);
-              const businessPct = Math.min(100 - personalPct, (business / threshold) * 100);
+              const activeKinds = Object.keys(TRIP_TYPES).filter((k) => byType[k] > 0);
+              let usedPct = 0;
+              const segments = activeKinds.map((k) => {
+                const pct = Math.min(100 - usedPct, (byType[k] / threshold) * 100);
+                usedPct += pct;
+                return { key: k, pct, color: TRIP_TYPES[k].color };
+              });
               const editing = editingThreshold === country;
               return (
                 <div key={country}>
@@ -1759,24 +1766,29 @@ function InsightsTab({ trips, onViewCountry }) {
                       />
                     ) : (
                       <button onClick={() => setEditingThreshold(country)} className="text-right" style={{ color: over ? DANGER : MUTED, fontWeight: over ? 600 : 400 }}>
-                        {days}d{typeFilter === "all" && personal > 0 && business > 0 && (
-                          <span style={{ color: MUTED, fontWeight: 400 }}> ({personal}p / {business}b)</span>
+                        {days}d{typeFilter === "all" && activeKinds.length > 1 && (
+                          <span style={{ color: MUTED, fontWeight: 400 }}> ({activeKinds.map((k) => `${byType[k]}${k[0]}`).join(" / ")})</span>
                         )}
                         <span style={{ color: MUTED, fontWeight: 400 }}> / {threshold}</span>
                       </button>
                     )}
                   </div>
                   <div className="h-2 rounded-full overflow-hidden flex" style={{ background: SURFACE_RAISED }}>
-                    <div className="h-full transition-all duration-500" style={{ width: `${personalPct}%`, background: over ? DANGER : TEAL }} />
-                    <div className="h-full transition-all duration-500" style={{ width: `${businessPct}%`, background: over ? `${DANGER}AA` : BUSINESS }} />
+                    {segments.map((s, i) => (
+                      <div key={s.key} className="h-full transition-all duration-500"
+                        style={{ width: `${s.pct}%`, background: over ? (i === 0 ? DANGER : `${DANGER}AA`) : s.color }} />
+                    ))}
                   </div>
                 </div>
               );
             })}
           </div>
           <div className="mt-5 pt-4 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs" style={{ borderTop: `1px solid ${BORDER}`, color: MUTED }}>
-            <span className="flex items-center gap-1.5"><span className="inline-block h-2 w-2 rounded-full" style={{ background: TEAL }} /> personal</span>
-            <span className="flex items-center gap-1.5"><span className="inline-block h-2 w-2 rounded-full" style={{ background: BUSINESS }} /> business</span>
+            {Object.entries(TRIP_TYPES).map(([key, meta]) => (
+              <span key={key} className="flex items-center gap-1.5">
+                <span className="inline-block h-2 w-2 rounded-full" style={{ background: meta.color }} /> {meta.label.toLowerCase()} ({key[0]})
+              </span>
+            ))}
             <span className="flex items-center gap-1.5"><span className="inline-block h-2 w-2 rounded-full" style={{ background: DANGER }} /> over threshold</span>
             <span>Click a country name to see its trips, or a day count to set a custom threshold.</span>
           </div>
@@ -2137,16 +2149,18 @@ function TypeBadge({ type }) {
 }
 
 function TypeFilter({ value, onChange }) {
-  const options = [{ id: "all", label: "All" }, { id: "personal", label: "Personal", icon: Home }, { id: "business", label: "Business", icon: Briefcase }];
+  const options = [
+    { id: "all", label: "All", color: ACCENT },
+    ...Object.entries(TRIP_TYPES).map(([id, meta]) => ({ id, label: meta.label, icon: meta.icon, color: meta.color })),
+  ];
   return (
     <div className="flex gap-1 rounded-lg p-1" style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}` }}>
       {options.map((o) => {
         const active = value === o.id;
         const Icon = o.icon;
-        const color = o.id === "personal" ? TEAL : o.id === "business" ? BUSINESS : ACCENT;
         return (
           <button key={o.id} onClick={() => onChange(o.id)} className="flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors"
-            style={{ background: active ? SURFACE : "transparent", color: active ? color : MUTED }}>
+            style={{ background: active ? SURFACE : "transparent", color: active ? o.color : MUTED }}>
             {Icon && <Icon size={12} />} {o.label}
           </button>
         );
