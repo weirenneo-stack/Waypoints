@@ -345,6 +345,90 @@ function overlapDaysInRollingWindow(trip, windowStart, windowEnd) {
   if (hi < lo) return 0;
   return Math.round((hi - lo) / 86400000) + 1;
 }
+
+/* ---------------------------------------------------------------------- */
+/* Shared date-window filter (Calendar year / Rolling 365d / Custom range) */
+/* Used by Insights, Stamp Wall, and World Map so all three tabs slice     */
+/* trips by the same period logic and look the same doing it.              */
+/* ---------------------------------------------------------------------- */
+
+function useDateWindow(trips) {
+  const years = useMemo(() => {
+    const s = new Set();
+    trips.forEach((t) => { s.add(toDate(t.start).getFullYear()); s.add(toDate(t.end).getFullYear()); });
+    s.add(new Date().getFullYear());
+    return [...s].sort((a, b) => b - a);
+  }, [trips]);
+
+  const [windowMode, setWindowMode] = useState("calendar"); // calendar | rolling | custom
+  const [year, setYear] = useState(years[0]);
+  const [customFrom, setCustomFrom] = useState(() => `${new Date().getFullYear()}-01-01`);
+  const [customTo, setCustomTo] = useState(() => new Date().toISOString().slice(0, 10));
+  useEffect(() => { if (!years.includes(year)) setYear(years[0]); }, [years]); // eslint-disable-line
+
+  const rollingRange = useMemo(() => {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - 364);
+    return { start, end };
+  }, []);
+
+  const customRangeValid = !!(customFrom && customTo && toDate(customTo) >= toDate(customFrom));
+
+  const overlapDays = (t) => windowMode === "rolling"
+    ? overlapDaysInRollingWindow(t, rollingRange.start, rollingRange.end)
+    : windowMode === "custom"
+    ? (customRangeValid ? overlapDaysInRollingWindow(t, toDate(customFrom), toDate(customTo)) : 0)
+    : overlapDaysInYear(t, year);
+
+  const periodLabel = windowMode === "rolling"
+    ? "the last 365 days"
+    : windowMode === "custom"
+    ? (customRangeValid ? formatRange(customFrom, customTo) : "your selected range")
+    : `${year}`;
+
+  return {
+    windowMode, setWindowMode, year, setYear, years,
+    customFrom, setCustomFrom, customTo, setCustomTo, customRangeValid,
+    overlapDays, periodLabel,
+    depsKey: `${windowMode}|${year}|${customFrom}|${customTo}|${customRangeValid}`,
+  };
+}
+
+function DateWindowPicker({ dw }) {
+  return (
+    <>
+      <div className="flex gap-1 rounded-lg p-1" style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}` }}>
+        {[{ id: "calendar", label: "Calendar year" }, { id: "rolling", label: "Rolling 365d" }, { id: "custom", label: "Custom range" }].map((o) => (
+          <button key={o.id} onClick={() => dw.setWindowMode(o.id)}
+            className="rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors"
+            style={{ background: dw.windowMode === o.id ? SURFACE : "transparent", color: dw.windowMode === o.id ? ACCENT : MUTED }}>
+            {o.label}
+          </button>
+        ))}
+      </div>
+      {dw.windowMode === "calendar" && (
+        <div className="relative">
+          <select value={dw.year} onChange={(e) => dw.setYear(Number(e.target.value))}
+            className="appearance-none rounded-lg pl-4 pr-9 py-2.5 text-sm font-medium outline-none cursor-pointer"
+            style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}`, color: TEXT }}>
+            {dw.years.map((y) => <option key={y} value={y}>{y}</option>)}
+          </select>
+          <ChevronDown size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2" style={{ color: MUTED }} />
+        </div>
+      )}
+      {dw.windowMode === "custom" && (
+        <div className="flex items-center gap-1.5">
+          <input type="date" value={dw.customFrom} max={dw.customTo || undefined} onChange={(e) => dw.setCustomFrom(e.target.value)}
+            className="rounded-lg px-2.5 py-2 text-xs outline-none" style={inputStyle} />
+          <span className="text-xs" style={{ color: MUTED }}>to</span>
+          <input type="date" value={dw.customTo} min={dw.customFrom || undefined} onChange={(e) => dw.setCustomTo(e.target.value)}
+            className="rounded-lg px-2.5 py-2 text-xs outline-none" style={inputStyle} />
+        </div>
+      )}
+    </>
+  );
+}
 function validateTrip({ country, start, end }) {
   if (!country || !country.trim()) return "Enter a country name.";
   if (!start || !end) return "Pick a start and end date.";
@@ -1465,7 +1549,9 @@ function InsightsTab({ trips, onViewCountry }) {
 
   const [year, setYear] = useState(years[0]);
   const [typeFilter, setTypeFilter] = useState("all");
-  const [windowMode, setWindowMode] = useState("calendar"); // calendar | rolling
+  const [windowMode, setWindowMode] = useState("calendar"); // calendar | rolling | custom
+  const [customFrom, setCustomFrom] = useState(() => `${new Date().getFullYear()}-01-01`);
+  const [customTo, setCustomTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [settings, setSettings] = useState(loadSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [editingThreshold, setEditingThreshold] = useState(null); // country currently being edited
@@ -1483,11 +1569,15 @@ function InsightsTab({ trips, onViewCountry }) {
     return { start, end };
   }, []);
 
+  const customRangeValid = customFrom && customTo && toDate(customTo) >= toDate(customFrom);
+
   const byCountry = useMemo(() => {
     const map = {};
     trips.filter((t) => typeFilter === "all" || (t.type || "personal") === typeFilter).forEach((t) => {
       const d = windowMode === "rolling"
         ? overlapDaysInRollingWindow(t, rollingRange.start, rollingRange.end)
+        : windowMode === "custom"
+        ? (customRangeValid ? overlapDaysInRollingWindow(t, toDate(customFrom), toDate(customTo)) : 0)
         : overlapDaysInYear(t, year);
       if (d <= 0) return;
       const kind = t.type || "personal";
@@ -1496,7 +1586,7 @@ function InsightsTab({ trips, onViewCountry }) {
       map[t.country][kind] += d;
     });
     return Object.values(map).sort((a, b) => b.days - a.days);
-  }, [trips, year, typeFilter, windowMode, rollingRange]);
+  }, [trips, year, typeFilter, windowMode, rollingRange, customFrom, customTo, customRangeValid]);
 
   const thresholdFor = (country) => settings.thresholds[country] || RESIDENCY_THRESHOLD;
   const isHome = (country) => settings.homeCountry && country === settings.homeCountry;
@@ -1504,7 +1594,11 @@ function InsightsTab({ trips, onViewCountry }) {
   const totalDays = byCountry.reduce((s, c) => s + c.days, 0);
   const overThreshold = byCountry.filter((c) => !isHome(c.country) && c.days > thresholdFor(c.country));
 
-  const periodLabel = windowMode === "rolling" ? "the last 365 days" : `${year}`;
+  const periodLabel = windowMode === "rolling"
+    ? "the last 365 days"
+    : windowMode === "custom"
+    ? (customRangeValid ? formatRange(customFrom, customTo) : "your selected range")
+    : `${year}`;
 
   const saveThreshold = (country, value) => {
     const num = parseInt(value, 10);
@@ -1525,7 +1619,7 @@ function InsightsTab({ trips, onViewCountry }) {
         <div className="flex items-center gap-2 flex-wrap">
           <TypeFilter value={typeFilter} onChange={setTypeFilter} />
           <div className="flex gap-1 rounded-lg p-1" style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}` }}>
-            {[{ id: "calendar", label: "Calendar year" }, { id: "rolling", label: "Rolling 365d" }].map((o) => (
+            {[{ id: "calendar", label: "Calendar year" }, { id: "rolling", label: "Rolling 365d" }, { id: "custom", label: "Custom range" }].map((o) => (
               <button key={o.id} onClick={() => setWindowMode(o.id)}
                 className="rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors"
                 style={{ background: windowMode === o.id ? SURFACE : "transparent", color: windowMode === o.id ? ACCENT : MUTED }}>
@@ -1541,6 +1635,15 @@ function InsightsTab({ trips, onViewCountry }) {
                 {years.map((y) => <option key={y} value={y}>{y}</option>)}
               </select>
               <ChevronDown size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2" style={{ color: MUTED }} />
+            </div>
+          )}
+          {windowMode === "custom" && (
+            <div className="flex items-center gap-1.5">
+              <input type="date" value={customFrom} max={customTo || undefined} onChange={(e) => setCustomFrom(e.target.value)}
+                className="rounded-lg px-2.5 py-2 text-xs outline-none" style={inputStyle} />
+              <span className="text-xs" style={{ color: MUTED }}>to</span>
+              <input type="date" value={customTo} min={customFrom || undefined} onChange={(e) => setCustomTo(e.target.value)}
+                className="rounded-lg px-2.5 py-2 text-xs outline-none" style={inputStyle} />
             </div>
           )}
           <button onClick={() => setSettingsOpen((s) => !s)} title="Home country & thresholds"
@@ -1580,7 +1683,11 @@ function InsightsTab({ trips, onViewCountry }) {
       )}
 
       {byCountry.length === 0 ? (
-        <EmptyState text={windowMode === "rolling" ? "No trips in the last 365 days." : `No trips recorded for ${year}.`} />
+        <EmptyState text={
+          windowMode === "rolling" ? "No trips in the last 365 days."
+          : windowMode === "custom" ? (customRangeValid ? `No trips recorded for ${periodLabel}.` : "Pick a start date before the end date.")
+          : `No trips recorded for ${year}.`
+        } />
       ) : (
         <div className="rounded-2xl p-6" style={{ background: SURFACE, border: `1px solid ${BORDER}` }}>
           <div className="text-sm mb-5" style={{ color: MUTED }}>
@@ -1655,19 +1762,21 @@ function InsightsTab({ trips, onViewCountry }) {
 function MapTab({ trips, onEdit }) {
   const [selected, setSelected] = useState(null);
   const [typeFilter, setTypeFilter] = useState("all");
+  const dw = useDateWindow(trips);
 
   const filteredTrips = useMemo(() => trips.filter((t) => typeFilter === "all" || (t.type || "personal") === typeFilter), [trips, typeFilter]);
 
   const byCountry = useMemo(() => {
     const map = {};
     filteredTrips.forEach((t) => {
-      const d = inclusiveDays(t.start, t.end);
+      const d = dw.overlapDays(t);
+      if (d <= 0) return;
       if (!map[t.country]) map[t.country] = { country: t.country, days: 0, trips: [] };
       map[t.country].days += d;
       map[t.country].trips.push(t);
     });
     return map;
-  }, [filteredTrips]);
+  }, [filteredTrips, dw.depsKey]); // eslint-disable-line
 
   useEffect(() => {
     if (selected && byCountry[selected.country]) setSelected(byCountry[selected.country]);
@@ -1691,13 +1800,16 @@ function MapTab({ trips, onEdit }) {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 style={{ fontFamily: SERIF, fontSize: "1.3rem", fontWeight: 600 }}>Stamp wall</h2>
-          <p className="text-sm mt-1" style={{ color: MUTED }}>{visitedCount} {visitedCount === 1 ? "country" : "countries"} stamped — larger and brighter means more days spent there.</p>
+          <p className="text-sm mt-1" style={{ color: MUTED }}>{visitedCount} {visitedCount === 1 ? "country" : "countries"} stamped for {dw.periodLabel} — larger and brighter means more days spent there.</p>
         </div>
-        <TypeFilter value={typeFilter} onChange={setTypeFilter} />
+        <div className="flex items-center gap-2 flex-wrap">
+          <DateWindowPicker dw={dw} />
+          <TypeFilter value={typeFilter} onChange={setTypeFilter} />
+        </div>
       </div>
 
       {visitedCount === 0 ? (
-        <EmptyState text="No trips match this filter." />
+        <EmptyState text={dw.windowMode === "custom" && !dw.customRangeValid ? "Pick a start date before the end date." : "No trips stamped for this period."} />
       ) : (
         <div className="space-y-8">
           {CONTINENT_ORDER.filter((c) => grouped[c]?.length).map((continent) => (
@@ -1779,6 +1891,7 @@ function WorldMapTab({ trips, onEdit }) {
   const [viewMode, setViewMode] = useState("dots"); // dots | outline
   const [zoom, setZoom] = useState(1);
   const [center, setCenter] = useState([0, 20]);
+  const dw = useDateWindow(trips);
 
   const MIN_ZOOM = 1;
   const MAX_ZOOM = 8;
@@ -1792,13 +1905,14 @@ function WorldMapTab({ trips, onEdit }) {
     const map = {};
     filteredTrips.forEach((t) => {
       if (!COUNTRY_LATLON[t.country]) return;
-      const d = inclusiveDays(t.start, t.end);
+      const d = dw.overlapDays(t);
+      if (d <= 0) return;
       if (!map[t.country]) map[t.country] = { country: t.country, days: 0, trips: [] };
       map[t.country].days += d;
       map[t.country].trips.push(t);
     });
     return map;
-  }, [filteredTrips]);
+  }, [filteredTrips, dw.depsKey]); // eslint-disable-line
 
   useEffect(() => {
     if (selected && byCountry[selected.country]) setSelected(byCountry[selected.country]);
@@ -1807,7 +1921,11 @@ function WorldMapTab({ trips, onEdit }) {
 
   const entries = Object.values(byCountry);
   const maxDays = Math.max(1, ...entries.map((e) => e.days));
-  const unmapped = [...new Set(filteredTrips.filter((t) => !COUNTRY_LATLON[t.country]).map((t) => t.country))];
+  const unmapped = useMemo(() => {
+    const set = new Set();
+    filteredTrips.forEach((t) => { if (!COUNTRY_LATLON[t.country] && dw.overlapDays(t) > 0) set.add(t.country); });
+    return [...set];
+  }, [filteredTrips, dw.depsKey]); // eslint-disable-line
   const continentsShown = [...new Set(entries.map((e) => continentOf(e.country)))];
 
   // Index visited countries by every name variant that might appear as
@@ -1830,7 +1948,9 @@ function WorldMapTab({ trips, onEdit }) {
         <div>
           <h2 style={{ fontFamily: SERIF, fontSize: "1.3rem", fontWeight: 600 }}>World map</h2>
           <p className="text-sm mt-1" style={{ color: MUTED }}>
-            {viewMode === "outline" ? "Visited countries light up — click one to see its trips." : "Dot size and glow track days spent — click a country to see its trips."}
+            {viewMode === "outline"
+              ? `Visited countries light up for ${dw.periodLabel} — click one to see its trips.`
+              : `Dot size and glow track days spent in ${dw.periodLabel} — click a country to see its trips.`}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -1843,12 +1963,13 @@ function WorldMapTab({ trips, onEdit }) {
               </button>
             ))}
           </div>
+          <DateWindowPicker dw={dw} />
           <TypeFilter value={typeFilter} onChange={setTypeFilter} />
         </div>
       </div>
 
       {entries.length === 0 ? (
-        <EmptyState text="No trips match this filter." />
+        <EmptyState text={dw.windowMode === "custom" && !dw.customRangeValid ? "Pick a start date before the end date." : "No trips match this filter."} />
       ) : (
         <div className="relative rounded-2xl p-4 sm:p-6" style={{ background: SURFACE, border: `1px solid ${BORDER}` }}>
           <div className="absolute right-6 top-6 z-10 flex flex-col gap-1 rounded-lg p-1" style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}` }}>
