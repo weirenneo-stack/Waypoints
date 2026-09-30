@@ -187,7 +187,31 @@ const CONTINENT_ACCENT = {
   Americas: "#4FB3A9", Europe: "#E3A23C", Asia: "#D97E7E",
   Africa: "#C9A6E8", Oceania: "#7FB0E8", Other: "#8B93A7",
 };
+// Global fallback: 183 days is the standard tax-residency test used by the
+// large majority of countries (Singapore included). Countries below use a
+// different day-count for that same test — sourced from each country's
+// domestic tax-residency rule, not immigration/visa-free stay limits (which
+// are usually shorter and unrelated to nationality). Where a country's rule
+// is really a multi-year or facts-based test rather than a flat day count
+// (e.g. the US's weighted Substantial Presence Test, or the Netherlands'
+// facts-and-circumstances test), we keep the 183 fallback as the closest
+// single-number approximation. This only sets each country's *default* —
+// it can still be overridden per country in the Insights settings panel.
 const RESIDENCY_THRESHOLD = 183;
+const COUNTRY_RESIDENCY_THRESHOLD = {
+  Brazil: 184, // any 12-month window
+  Switzerland: 90, // without gainful employment (30 with)
+  Japan: 365, // domicile-based; ~1 year rather than a flat day count
+  India: 182, // fiscal year (Apr-Mar)
+  Thailand: 180, // calendar year
+  Malaysia: 182, // calendar year
+  Philippines: 180, // deemed resident past this
+  "Hong Kong": 180, // or 300 days combined across 2 years
+  "South Africa": 91, // plus 915 days across the preceding 5 years
+};
+function defaultThresholdFor(country) {
+  return COUNTRY_RESIDENCY_THRESHOLD[country] || RESIDENCY_THRESHOLD;
+}
 const WORLD_GEO_URL = "https://unpkg.com/world-atlas@2.0.2/countries-110m.json";
 
 // This TopoJSON labels a few countries slightly differently than our own
@@ -1629,7 +1653,7 @@ function InsightsTab({ trips, onEdit }) {
     setSelected(fresh || null);
   }, [byCountry]); // eslint-disable-line
 
-  const thresholdFor = (country) => settings.thresholds[country] || RESIDENCY_THRESHOLD;
+  const thresholdFor = (country) => settings.thresholds[country] || defaultThresholdFor(country);
   const isHome = (country) => settings.homeCountry && country === settings.homeCountry;
 
   const totalDays = byCountry.reduce((s, c) => s + c.days, 0);
@@ -1644,7 +1668,7 @@ function InsightsTab({ trips, onEdit }) {
   const saveThreshold = (country, value) => {
     const num = parseInt(value, 10);
     const next = { ...settings, thresholds: { ...settings.thresholds } };
-    if (!num || num === RESIDENCY_THRESHOLD) delete next.thresholds[country];
+    if (!num || num === defaultThresholdFor(country)) delete next.thresholds[country];
     else next.thresholds[country] = num;
     updateSettings(next);
     setEditingThreshold(null);
@@ -1709,7 +1733,7 @@ function InsightsTab({ trips, onEdit }) {
             </select>
           </label>
           <span className="text-xs" style={{ color: MUTED }}>
-            Your home country never triggers the threshold warning. Click any day count below to set a custom threshold for that country (default {RESIDENCY_THRESHOLD}).
+            Your home country never triggers the threshold warning. Each country defaults to its own tax-residency day count (e.g. {RESIDENCY_THRESHOLD} for most, {defaultThresholdFor("Thailand")} for Thailand, {defaultThresholdFor("Switzerland")} for Switzerland) — click any day count below to override it.
           </span>
         </div>
       )}
@@ -1818,10 +1842,12 @@ function InsightsTab({ trips, onEdit }) {
 
 function MapTab({ trips, onEdit }) {
   const [selected, setSelected] = useState(null);
-  const [typeFilter, setTypeFilter] = useState("all");
+  const [typeFilters, setTypeFilters] = useState(() => Object.keys(TRIP_TYPES));
   const dw = useDateWindow(trips);
+  const settings = loadSettings();
+  const thresholdFor = (country) => settings.thresholds[country] || defaultThresholdFor(country);
 
-  const filteredTrips = useMemo(() => trips.filter((t) => typeFilter === "all" || (t.type || "personal") === typeFilter), [trips, typeFilter]);
+  const filteredTrips = useMemo(() => trips.filter((t) => typeFilters.includes(t.type || "personal")), [trips, typeFilters]);
 
   const byCountry = useMemo(() => {
     const map = {};
@@ -1861,7 +1887,7 @@ function MapTab({ trips, onEdit }) {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <DateWindowPicker dw={dw} />
-          <TypeFilter value={typeFilter} onChange={setTypeFilter} />
+          <TypeMultiFilter value={typeFilters} onChange={setTypeFilters} />
         </div>
       </div>
 
@@ -1887,7 +1913,7 @@ function MapTab({ trips, onEdit }) {
                       <Stamp size={18} style={{ color, opacity: intensity }} />
                       <span className="mt-1.5 text-xs font-medium text-center px-2 leading-tight" style={{ color: TEXT }}>{entry.country}</span>
                       <span className="text-[10px] mt-0.5" style={{ color: MUTED }}>{entry.days}d</span>
-                      {entry.days > RESIDENCY_THRESHOLD && (
+                      {entry.days > thresholdFor(entry.country) && (
                         <span className="absolute -top-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full" style={{ background: DANGER }}>
                           <AlertTriangle size={11} color="#1A0A0C" />
                         </span>
@@ -1944,11 +1970,13 @@ function CountryTripsModal({ entry, onClose, onEdit }) {
 
 function WorldMapTab({ trips, onEdit }) {
   const [selected, setSelected] = useState(null);
-  const [typeFilter, setTypeFilter] = useState("all");
+  const [typeFilters, setTypeFilters] = useState(() => Object.keys(TRIP_TYPES));
   const [viewMode, setViewMode] = useState("dots"); // dots | outline
   const [zoom, setZoom] = useState(1);
   const [center, setCenter] = useState([0, 20]);
   const dw = useDateWindow(trips);
+  const settings = loadSettings();
+  const thresholdFor = (country) => settings.thresholds[country] || defaultThresholdFor(country);
 
   const MIN_ZOOM = 1;
   const MAX_ZOOM = 8;
@@ -1956,7 +1984,7 @@ function WorldMapTab({ trips, onEdit }) {
   const zoomOut = () => setZoom((z) => Math.max(MIN_ZOOM, z / 1.5));
   const resetView = () => { setZoom(1); setCenter([0, 20]); };
 
-  const filteredTrips = useMemo(() => trips.filter((t) => typeFilter === "all" || (t.type || "personal") === typeFilter), [trips, typeFilter]);
+  const filteredTrips = useMemo(() => trips.filter((t) => typeFilters.includes(t.type || "personal")), [trips, typeFilters]);
 
   const byCountry = useMemo(() => {
     const map = {};
@@ -2021,7 +2049,7 @@ function WorldMapTab({ trips, onEdit }) {
             ))}
           </div>
           <DateWindowPicker dw={dw} />
-          <TypeFilter value={typeFilter} onChange={setTypeFilter} />
+          <TypeMultiFilter value={typeFilters} onChange={setTypeFilters} />
         </div>
       </div>
 
@@ -2070,7 +2098,7 @@ function WorldMapTab({ trips, onEdit }) {
                   const shapeName = (geo.properties?.name || "").toLowerCase().trim();
                   const entry = visitedByShapeName[shapeName];
                   const ratio = entry ? entry.days / maxDays : 0;
-                  const over = entry && entry.days > RESIDENCY_THRESHOLD;
+                  const over = entry && entry.days > thresholdFor(entry.country);
                   const color = entry ? CONTINENT_ACCENT[continentOf(entry.country)] : SURFACE_RAISED;
                   const fillOpacity = entry ? 0.4 + 0.5 * ratio : 1;
                   return (
@@ -2099,7 +2127,7 @@ function WorldMapTab({ trips, onEdit }) {
               const [lat, lon] = COUNTRY_LATLON[entry.country];
               const ratio = entry.days / maxDays;
               const r = (5 + 9 * ratio) / zoom;
-              const over = entry.days > RESIDENCY_THRESHOLD;
+              const over = entry.days > thresholdFor(entry.country);
               const color = CONTINENT_ACCENT[continentOf(entry.country)];
               return (
                 <Marker key={entry.country} coordinates={[lon, lat]} onClick={() => setSelected(entry)} style={{ cursor: "pointer" }}>
@@ -2119,8 +2147,7 @@ function WorldMapTab({ trips, onEdit }) {
               </span>
             ))}
             <span className="flex items-center gap-1.5">
-              <span className="inline-block h-2 w-2 rounded-full" style={{ background: DANGER }} /> over {RESIDENCY_THRESHOLD} days
-
+              <span className="inline-block h-2 w-2 rounded-full" style={{ background: DANGER }} /> over that country's residency threshold
             </span>
           </div>
         </div>
