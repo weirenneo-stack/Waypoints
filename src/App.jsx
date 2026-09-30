@@ -1202,7 +1202,7 @@ function TripEditModal({ trip, onClose, onSave, isNew = false }) {
 
 function HistoryTab({ trips, onDelete, onBulkDelete, onEdit, onImport, initialQuery = "" }) {
   const [confirmId, setConfirmId] = useState(null);
-  const [typeFilter, setTypeFilter] = useState("all");
+  const [typeFilters, setTypeFilters] = useState(() => Object.keys(TRIP_TYPES));
   const [query, setQuery] = useState(initialQuery);
   const [sortBy, setSortBy] = useState("newest"); // newest | oldest | country | longest
   const [dateFrom, setDateFrom] = useState("");
@@ -1216,7 +1216,7 @@ function HistoryTab({ trips, onDelete, onBulkDelete, onEdit, onImport, initialQu
     const from = dateFrom ? toDate(dateFrom) : null;
     const to = dateTo ? toDate(dateTo) : null;
     let list = trips
-      .filter((t) => typeFilter === "all" || (t.type || "personal") === typeFilter)
+      .filter((t) => typeFilters.includes(t.type || "personal"))
       .filter((t) => !q || t.country.toLowerCase().includes(q))
       .filter((t) => {
         if (!from && !to) return true;
@@ -1233,7 +1233,7 @@ function HistoryTab({ trips, onDelete, onBulkDelete, onEdit, onImport, initialQu
       default: list = list.sort((a, b) => toDate(b.start) - toDate(a.start));
     }
     return list;
-  }, [trips, typeFilter, query, sortBy, dateFrom, dateTo]);
+  }, [trips, typeFilters, query, sortBy, dateFrom, dateTo]);
 
   // Drop any selected ids that no longer match the current filter/search
   useEffect(() => {
@@ -1305,7 +1305,7 @@ function HistoryTab({ trips, onDelete, onBulkDelete, onEdit, onImport, initialQu
             <p className="text-sm mt-1" style={{ color: MUTED }}>{sorted.length} of {trips.length} trips</p>
           </div>
           <div className="flex items-center gap-2">
-            <TypeFilter value={typeFilter} onChange={setTypeFilter} />
+            <TypeMultiFilter value={typeFilters} onChange={setTypeFilters} />
             <button onClick={handleExport} title="Export trips as JSON"
               className="flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium"
               style={{ background: SURFACE_RAISED, border: `1px solid ${BORDER}`, color: MUTED }}>
@@ -1453,14 +1453,14 @@ function HistoryTab({ trips, onDelete, onBulkDelete, onEdit, onImport, initialQu
 
 function CalendarTab({ trips, onEdit, onQuickAdd }) {
   const [monthDate, setMonthDate] = useState(() => startOfMonth(new Date()));
-  const [typeFilter, setTypeFilter] = useState("all");
+  const [typeFilters, setTypeFilters] = useState(() => Object.keys(TRIP_TYPES));
   const [selected, setSelected] = useState(null);
 
   const gridDays = useMemo(() => buildMonthGrid(monthDate), [monthDate]);
 
   const filteredTrips = useMemo(
-    () => trips.filter((t) => typeFilter === "all" || (t.type || "personal") === typeFilter),
-    [trips, typeFilter]
+    () => trips.filter((t) => typeFilters.includes(t.type || "personal")),
+    [trips, typeFilters]
   );
 
   // Map of "YYYY-MM-DD" -> Set of countries active that day, built once per
@@ -1516,7 +1516,7 @@ function CalendarTab({ trips, onEdit, onQuickAdd }) {
           <h2 style={{ fontFamily: SERIF, fontSize: "1.3rem", fontWeight: 600 }}>Calendar</h2>
           <p className="text-sm mt-1" style={{ color: MUTED }}>Flags mark the days you were traveling — click a flag to edit that trip, or an empty day to log a new one.</p>
         </div>
-        <TypeFilter value={typeFilter} onChange={setTypeFilter} />
+        <TypeMultiFilter value={typeFilters} onChange={setTypeFilters} />
       </div>
 
       <div className="rounded-2xl p-4 sm:p-6" style={{ background: SURFACE, border: `1px solid ${BORDER}` }}>
